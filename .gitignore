@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# secrets — never commit real credentials (.env.example IS committed as a template)
+.env
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+
+# build output
+dist/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
