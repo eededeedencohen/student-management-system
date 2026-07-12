@@ -59,7 +59,12 @@ export const list = asyncHandler(async (req, res) => {
 
   if (req.query.course) filter.course = req.query.course;
   if (req.query.courseField) filter.courseField = req.query.courseField;
-  if (req.query.paymentStatus) filter.paymentStatus = req.query.paymentStatus;
+  if (req.query.paymentStatus) {
+    filter.paymentStatus = req.query.paymentStatus;
+    // סינון לפי סטטוס תשלום מדבר על עסקאות אמת — עסקה מבוטלת (יתרה 0 דרך writeOff)
+    // לא "שולמה"; מי שרוצה מבוטלות בוחר סוג רשומה "מבוטל" במפורש.
+    if (!req.query.recordType) filter.recordType = { $nin: ['cancelled', 'refund'] };
+  }
   if (req.query.recordType) filter.recordType = req.query.recordType;
   if (req.query.needsReview !== undefined) {
     filter.needsReview = req.query.needsReview === 'true';
