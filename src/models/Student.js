@@ -16,7 +16,8 @@ const studentSchema = new Schema(
     lastName: { type: String, trim: true }, // שם משפחה
     hebrewName: { type: String, trim: true }, // שם בעברית
     englishName: { type: String, trim: true }, // שם באנגלית
-    idNumber: { type: String, trim: true, index: true }, // ת.ז.
+    idNumber: { type: String, trim: true, index: true }, // ת.ז. (סינתטית 1001+ לפי סדר כרונולוגי, כמו ב-JSON)
+    realIdNumber: { type: String, trim: true }, // ת.ז. אמיתית — רק למי שידועה במקור
     mobile: { type: String, trim: true }, // נייד
     email: { type: String, trim: true, lowercase: true }, // מייל
     city: { type: String, trim: true }, // עיר

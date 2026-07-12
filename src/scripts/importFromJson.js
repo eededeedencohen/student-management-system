@@ -266,7 +266,9 @@ try {
     const { firstName, lastName } = splitName(s.name);
     return {
       studentNumber: s.id, fullName: s.name, firstName, lastName,
-      idNumber: s.realIdNumber || undefined, sourceFile: 'students.json',
+      idNumber: String(s.id), // ת.ז. סינתטית 1001+ — כמו ב-JSON
+      realIdNumber: s.realIdNumber || undefined, // ת.ז. אמיתית כשידועה
+      sourceFile: 'students.json',
     };
   });
   const insertedStudents = await Student.insertMany(studentDocs);
@@ -316,7 +318,7 @@ try {
         externalId: dl.dealId,
         student: stuDoc._id,
         studentName: s.name,
-        idNumber: s.realIdNumber || undefined,
+        idNumber: String(s.id),
         rep: repUser?._id,
         repName: repUser?.name || dl.rep,
         course: primaryCourse?._id,
