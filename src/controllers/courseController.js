@@ -30,12 +30,25 @@ function courseMoney(dealsOfCourse) {
   return { salesAmount: r2(salesAmount), collected: r2(collected), outstanding: r2(outstanding) };
 }
 
+/** מחזורים ישנים רבים נשמרו בלי תאריכים כלל — תווית המחזור ("11/25") היא רמז התאריך היחיד. */
+function cohortEdge(course) {
+  const m = /(\d{1,2})\s*\/\s*(\d{2,4})/.exec(course.cohortLabel || course.name || '');
+  if (!m) return null;
+  const month = Number(m[1]);
+  const yr = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return new Date(Date.UTC(yr < 100 ? 2000 + yr : yr, month - 1, 1));
+}
+
 /** במוד "מ-2026 בלבד": קורס ישן (שהסתיים לפני 2026 ואין לו נרשמי 2026) מוסתר. */
 function courseVisibleSince(req, course, enrolledCount) {
   const since = sinceOf(req);
   if (!since) return true;
-  const edge = course.endDate || course.startDate;
-  if (edge && new Date(edge) >= since) return true;
+  const edge = course.endDate || course.startDate || cohortEdge(course);
+  // אין תאריכים וגם אין רמז מחזור (קורס חדש שרק נוצר) — תמיד גלוי, אחרת
+  // הוא היה נעלם מהרשימה מיד אחרי היצירה (עוד אין לו נרשמים).
+  if (!edge) return true;
+  if (new Date(edge) >= since) return true;
   return enrolledCount > 0;
 }
 
