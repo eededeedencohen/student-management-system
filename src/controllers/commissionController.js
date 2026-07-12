@@ -27,6 +27,9 @@ const SALARY_RATIO_MIN = 7.5; // יחס שכר-להכנסה רצוי (מינימ
 const SALARY_RATIO_MAX = 15; // יחס שכר-להכנסה רצוי (מקסימום)
 
 const DAY = 86400000;
+// Base salary is MONTHLY; each granularity carries its FULL length in (30-day) months —
+// half year = ×6, week = 7/30 of the monthly base — regardless of how much of it has elapsed.
+const PERIOD_MONTHS = { day: 1 / 30, week: 7 / 30, month: 1, quarter: 3, half: 6, year: 12 };
 
 /**
  * Resolve the commission period into { dateFilter, baseMonths }:
@@ -34,9 +37,8 @@ const DAY = 86400000;
  *     period and ends today. "שבוע" on a Sunday counts only that Sunday;
  *     "חודש" on the 12th counts only the 1st–12th — it never spills into the
  *     previous week/month/quarter.
- *   - baseMonths → the elapsed part of the period as a fraction of a 30-day
- *     month (month on the 12th → 12/30), so the base salary and the
- *     salary/income ratio stay proportional to the days actually counted.
+ *   - baseMonths → the FULL period length relative to a month (PERIOD_MONTHS),
+ *     not the elapsed part: half = base ×6, week = base ×7/30.
  * Honours an explicit ?from/?to (prorates the base by its day span / 30).
  */
 function resolvePeriod(query, now) {
@@ -61,8 +63,7 @@ function resolvePeriod(query, now) {
     case 'month':
     default: from = startOfMonth(now);
   }
-  const baseMonths = Math.max((end - from) / DAY, 1) / 30;
-  return { dateFilter: { $gte: from, $lt: end }, baseMonths };
+  return { dateFilter: { $gte: from, $lt: end }, baseMonths: PERIOD_MONTHS[g] };
 }
 
 /**
