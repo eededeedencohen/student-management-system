@@ -80,6 +80,8 @@ export const list = asyncHandler(async (req, res) => {
         },
       },
     },
+    // מוד "מ-2026 בלבד": סטודנט בלי אף עסקת 2026 לא קיים מבחינת האפליקציה — מסונן החוצה
+    ...(sinceOf(req) ? [{ $match: { 'deals.0': { $exists: true } } }] : []),
     {
       $addFields: {
         totalPaid: { $sum: '$deals.totalPaid' },
@@ -94,10 +96,15 @@ export const list = asyncHandler(async (req, res) => {
     { $limit: limit },
   ];
 
-  const [data, total] = await Promise.all([
+  // הספירה חייבת לשקף את אותו הסינון (ולא רק את חיפוש הטקסט)
+  const countPipeline = pipeline.filter(
+    (st) => !('$sort' in st) && !('$skip' in st) && !('$limit' in st) && !('$addFields' in st && st.$addFields.totalPaid) && !('$project' in st)
+  );
+  const [data, countRows] = await Promise.all([
     Student.aggregate(pipeline).collation({ locale: 'he' }),
-    Student.countDocuments(match),
+    Student.aggregate([...countPipeline, { $count: 'n' }]),
   ]);
+  const total = countRows[0]?.n || 0;
 
   res.json({
     success: true,
