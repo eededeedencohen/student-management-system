@@ -11,20 +11,31 @@
  */
 
 const HEB_MONTHS = {
-  ינואר: 1, פברואר: 2, מרץ: 3, אפריל: 4, מאי: 5, יוני: 6,
-  יולי: 7, אוגוסט: 8, ספטמבר: 9, אוקטובר: 10, נובמבר: 11, דצמבר: 12,
+  ינואר: 1,
+  פברואר: 2,
+  מרץ: 3,
+  אפריל: 4,
+  מאי: 5,
+  יוני: 6,
+  יולי: 7,
+  אוגוסט: 8,
+  ספטמבר: 9,
+  אוקטובר: 10,
+  נובמבר: 11,
+  דצמבר: 12,
 };
 
 const DAY = 86400000;
 const MAX_GAP_DAYS = 150; // beyond this, "nearest cohort" is really a different/older cohort
 
-const norm = (s) => (s || '').replace(/["'׳״\s.]/g, '').toLowerCase();
+const norm = (s) => (s || "").replace(/["'׳״\s.]/g, "").toLowerCase();
 const cohortMonth = (label) => {
-  const m = /(\d{1,2})\s*\/\s*\d/.exec(label || '');
+  const m = /(\d{1,2})\s*\/\s*\d/.exec(label || "");
   return m ? parseInt(m[1], 10) : null;
 };
 const hintMonth = (raw) => {
-  for (const [k, v] of Object.entries(HEB_MONTHS)) if ((raw || '').includes(k)) return v;
+  for (const [k, v] of Object.entries(HEB_MONTHS))
+    if ((raw || "").includes(k)) return v;
   return null;
 };
 const nearest = (courses, dd) => {
@@ -56,19 +67,22 @@ export function buildCourseIndex(courses) {
 /** Returns { courseId, how } or null (unassigned). */
 export function matchDealToCourse(deal, index) {
   if (deal.course && index.byId.has(String(deal.course))) {
-    return { courseId: String(deal.course), how: 'fk' };
+    return { courseId: String(deal.course), how: "fk" };
   }
   const pool = index.byField.get(norm(deal.courseField)) || [];
   if (!pool.length) return null; // no course exists for this field → unassigned
 
   // The field has exactly one cohort → the only possible course (default assignment).
-  if (pool.length === 1) return { courseId: String(pool[0]._id), how: 'field-unique' };
+  if (pool.length === 1)
+    return { courseId: String(pool[0]._id), how: "field-unique" };
 
   // Explicit cohort label that matches a real cohort.
   if (deal.cohortLabel) {
-    const hit = pool.find((c) => norm(c.cohortLabel) === norm(deal.cohortLabel));
-    if (hit) return { courseId: String(hit._id), how: 'cohort' };
-    // else fall through — a named cohort not in the list (e.g. old 1/25) is caught below
+    const hit = pool.find(
+      (c) => norm(c.cohortLabel) === norm(deal.cohortLabel),
+    );
+    if (hit) return { courseId: String(hit._id), how: "cohort" };
+    // else fall through - a named cohort not in the list (e.g. old 1/25) is caught below
     // by the date window, which will leave genuinely-old deals unassigned.
   }
 
@@ -78,17 +92,19 @@ export function matchDealToCourse(deal, index) {
   const hm = hintMonth(deal.courseRaw);
   if (hm) {
     const cands = pool.filter((c) => cohortMonth(c.cohortLabel) === hm);
-    if (cands.length === 1) return { courseId: String(cands[0]._id), how: 'month-hint' };
+    if (cands.length === 1)
+      return { courseId: String(cands[0]._id), how: "month-hint" };
     if (cands.length > 1) {
       const { best } = dd ? nearest(cands, dd) : { best: cands[0] };
-      if (best) return { courseId: String(best._id), how: 'month-hint+date' };
+      if (best) return { courseId: String(best._id), how: "month-hint+date" };
     }
   }
 
   // Deal date closest to a cohort start, within a sane window (older deals stay unassigned).
   if (dd) {
     const { best, bestGap } = nearest(pool, dd);
-    if (best && bestGap / DAY <= MAX_GAP_DAYS) return { courseId: String(best._id), how: 'date' };
+    if (best && bestGap / DAY <= MAX_GAP_DAYS)
+      return { courseId: String(best._id), how: "date" };
   }
 
   return null; // ambiguous / older cohort not in the list → unassigned

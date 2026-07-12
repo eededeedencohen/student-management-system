@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
@@ -8,7 +8,7 @@ const { Schema } = mongoose;
  */
 const studentSchema = new Schema(
   {
-    // Human-friendly sequential id (1..N) — the "ID מבצע העסקה" while there are no ת.ז.
+    // Human-friendly sequential id (1..N) - the "ID מבצע העסקה" while there are no ת.ז.
     // numbers yet. Assigned on create and backfilled for existing students.
     studentNumber: { type: Number, index: true, unique: true, sparse: true },
     fullName: { type: String, required: true, trim: true, index: true }, // שם מלא כפי שהופיע
@@ -17,7 +17,7 @@ const studentSchema = new Schema(
     hebrewName: { type: String, trim: true }, // שם בעברית
     englishName: { type: String, trim: true }, // שם באנגלית
     idNumber: { type: String, trim: true, index: true }, // ת.ז. (סינתטית 1001+ לפי סדר כרונולוגי, כמו ב-JSON)
-    realIdNumber: { type: String, trim: true }, // ת.ז. אמיתית — רק למי שידועה במקור
+    realIdNumber: { type: String, trim: true }, // ת.ז. אמיתית - רק למי שידועה במקור
     mobile: { type: String, trim: true }, // נייד
     email: { type: String, trim: true, lowercase: true }, // מייל
     city: { type: String, trim: true }, // עיר
@@ -27,9 +27,10 @@ const studentSchema = new Schema(
     notes: { type: String, trim: true },
     sourceFile: { type: String }, // קובץ מקור בייבוא
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 studentSchema.index({ fullName: 1, idNumber: 1 });
 
-export default mongoose.models.Student || mongoose.model('Student', studentSchema);
+export default mongoose.models.Student ||
+  mongoose.model("Student", studentSchema);

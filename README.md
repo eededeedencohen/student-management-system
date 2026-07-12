@@ -1,4 +1,4 @@
-# Student Management System — Server
+# Student Management System - Server
 
 Backend for **שק"ל**, a student registration, sales, cash-flow, commissions and goals
 management system for a Hebrew coaching-courses business. Built as a MERN server that also
@@ -8,14 +8,14 @@ management system for a Hebrew coaching-courses business. Built as a MERN server
 
 ## Features
 
-- **Auth & roles** — passwordless pick-a-user login, manager / rep roles, super-admin
+- **Auth & roles** - passwordless pick-a-user login, manager / rep roles, super-admin
   "view as" (impersonation), rep-scoped data access.
-- **Deals & payments** — registrations with unified payment schedules, per-installment
+- **Deals & payments** - registrations with unified payment schedules, per-installment
   confirmation, reconciliation self-checks.
-- **Dashboards** — KPIs per period & per rep, cash-flow forecast, commissions & salary
+- **Dashboards** - KPIs per period & per rep, cash-flow forecast, commissions & salary
   (with prorated base and salary/income ratio), rep & manager goals.
-- **Courses** — catalog + Gantt, with best-effort enrollment matching of messy deal data.
-- **Excel** — imports the source workbooks and exports per-student / debtor / course files.
+- **Courses** - catalog + Gantt, with best-effort enrollment matching of messy deal data.
+- **Excel** - imports the source workbooks and exports per-student / debtor / course files.
 
 ## Getting started
 
@@ -27,7 +27,7 @@ npm run seed:users        # (optional) create login users
 npm run dev               # start on http://localhost:5000
 ```
 
-Open **http://localhost:5000** — the API is under `/api/*` and every other route serves
+Open **http://localhost:5000** - the API is under `/api/*` and every other route serves
 the bundled single-page client (`public/`).
 
 ## Environment

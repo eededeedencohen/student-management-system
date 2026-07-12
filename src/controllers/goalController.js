@@ -1,13 +1,13 @@
-import mongoose from 'mongoose';
-import Goal from '../models/Goal.js';
-import Registration from '../models/Registration.js';
-import Lead from '../models/Lead.js';
-import asyncHandler from '../utils/asyncHandler.js';
-import ApiError from '../utils/ApiError.js';
-import { nowFromReq } from '../utils/dateRanges.js';
+import mongoose from "mongoose";
+import Goal from "../models/Goal.js";
+import Registration from "../models/Registration.js";
+import Lead from "../models/Lead.js";
+import asyncHandler from "../utils/asyncHandler.js";
+import ApiError from "../utils/ApiError.js";
+import { nowFromReq } from "../utils/dateRanges.js";
 
 /**
- * Goals / Milestones controller — ניהול יעדים ואבני דרך.
+ * Goals / Milestones controller - ניהול יעדים ואבני דרך.
  * Managers create/update/delete goals; everyone can read goals in scope and
  * inspect progress. Progress compares the actual metric against the time
  * elapsed in the goal's period to flag on_track / at_risk / behind.
@@ -16,7 +16,8 @@ import { nowFromReq } from '../utils/dateRanges.js';
 const { Types } = mongoose;
 
 const toObjectId = (id) => {
-  if (id && Types.ObjectId.isValid(String(id))) return new Types.ObjectId(String(id));
+  if (id && Types.ObjectId.isValid(String(id)))
+    return new Types.ObjectId(String(id));
   return null;
 };
 
@@ -24,17 +25,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Whitelisted fields a manager may set when creating/updating a goal. */
 const GOAL_FIELDS = [
-  'title',
-  'rep',
-  'scope',
-  'metric',
-  'targetValue',
-  'periodType',
-  'startDate',
-  'endDate',
-  'workingDays',
-  'notes',
-  'active',
+  "title",
+  "rep",
+  "scope",
+  "metric",
+  "targetValue",
+  "periodType",
+  "startDate",
+  "endDate",
+  "workingDays",
+  "notes",
+  "active",
 ];
 
 const pickGoalFields = (body = {}) => {
@@ -55,43 +56,50 @@ const computeActual = async (goal) => {
   const repId = toObjectId(goal.rep);
   // יעד צוותי (scope==='team' או ללא rep) = כלל העסקאות; יעד אישי = רק של הנציג/ה
   const baseMatch = {
-    recordType: 'registration',
+    recordType: "registration",
     dealDate: { $gte: goal.startDate, $lte: goal.endDate },
   };
-  if (goal.scope === 'rep' && repId) baseMatch.rep = repId;
+  if (goal.scope === "rep" && repId) baseMatch.rep = repId;
 
-  if (goal.metric === 'salesAmount') {
+  if (goal.metric === "salesAmount") {
     const [row] = await Registration.aggregate([
       { $match: baseMatch },
-      { $group: { _id: null, value: { $sum: '$totalAmount' } } },
+      { $group: { _id: null, value: { $sum: "$totalAmount" } } },
     ]);
     return row?.value || 0;
   }
 
-  if (goal.metric === 'dealsCount') {
+  if (goal.metric === "dealsCount") {
     return Registration.countDocuments(baseMatch);
   }
 
-  if (goal.metric === 'collectedAmount') {
+  if (goal.metric === "collectedAmount") {
     const [row] = await Registration.aggregate([
       { $match: baseMatch },
-      { $group: { _id: null, value: { $sum: '$totalPaid' } } },
+      { $group: { _id: null, value: { $sum: "$totalPaid" } } },
     ]);
     return row?.value || 0;
   }
 
-  if (goal.metric === 'closeRate') {
+  if (goal.metric === "closeRate") {
     // אחוז סגירה = עסקאות שנסגרו / כמות הלידים שהתקבלו בתקופה (0..1)
     const deals = await Registration.countDocuments(baseMatch);
 
     // Leads in window: individual leads by receivedDate, or aggregate counts by period.
     const leadMatch = {
       $or: [
-        { isAggregate: { $ne: true }, receivedDate: { $gte: goal.startDate, $lte: goal.endDate } },
-        { isAggregate: true, periodStart: { $lte: goal.endDate }, periodEnd: { $gte: goal.startDate } },
+        {
+          isAggregate: { $ne: true },
+          receivedDate: { $gte: goal.startDate, $lte: goal.endDate },
+        },
+        {
+          isAggregate: true,
+          periodStart: { $lte: goal.endDate },
+          periodEnd: { $gte: goal.startDate },
+        },
       ],
     };
-    if (goal.scope === 'rep' && repId) leadMatch.rep = repId;
+    if (goal.scope === "rep" && repId) leadMatch.rep = repId;
 
     const [row] = await Lead.aggregate([
       { $match: leadMatch },
@@ -99,7 +107,9 @@ const computeActual = async (goal) => {
         $group: {
           _id: null,
           // ספירת לידים: בודדים נחשבים 1, צבירה לפי count
-          value: { $sum: { $cond: ['$isAggregate', { $ifNull: ['$count', 0] }, 1] } },
+          value: {
+            $sum: { $cond: ["$isAggregate", { $ifNull: ["$count", 0] }, 1] },
+          },
         },
       },
     ]);
@@ -119,7 +129,7 @@ const buildProgress = async (goal, refDate = new Date()) => {
   const target = goal.targetValue || 0;
   const pct = target > 0 ? actual / target : 0;
 
-  // אחוז התקדמות הזמן בתקופה. אם הוגדרו ימי עבודה — לפי הימים שחלפו ביחס לסה"כ;
+  // אחוז התקדמות הזמן בתקופה. אם הוגדרו ימי עבודה - לפי הימים שחלפו ביחס לסה"כ;
   // אחרת לפי ימים קלנדריים. תמיד נחתך לטווח 0..1.
   const start = new Date(goal.startDate).getTime();
   const end = new Date(goal.endDate).getTime();
@@ -138,9 +148,9 @@ const buildProgress = async (goal, refDate = new Date()) => {
 
   // סטטוס: בקצב / בסיכון / מאחור
   let status;
-  if (pct >= elapsedPct - 0.05) status = 'on_track';
-  else if (elapsedPct > 0.8 && pct < 0.8) status = 'at_risk';
-  else status = 'behind';
+  if (pct >= elapsedPct - 0.05) status = "on_track";
+  else if (elapsedPct > 0.8 && pct < 0.8) status = "at_risk";
+  else status = "behind";
 
   const remaining = target - actual;
 
@@ -165,29 +175,37 @@ export const list = asyncHandler(async (req, res) => {
   const filter = {};
 
   if (req.query.active !== undefined) {
-    filter.active = req.query.active === 'true' || req.query.active === true;
+    filter.active = req.query.active === "true" || req.query.active === true;
   }
 
   if (req.scopeRepId) {
     // נציג/ה: יעדים אישיים שלו/ה + יעדים צוותיים
-    filter.$or = [{ rep: toObjectId(req.scopeRepId) }, { scope: 'team' }];
+    filter.$or = [{ rep: toObjectId(req.scopeRepId) }, { scope: "team" }];
   } else if (req.query.rep) {
     // מנהל עם סינון אופציונלי לפי נציג/ה
     filter.rep = toObjectId(req.query.rep);
   }
 
-  const goals = await Goal.find(filter).sort({ active: -1, endDate: -1, createdAt: -1 });
+  const goals = await Goal.find(filter).sort({
+    active: -1,
+    endDate: -1,
+    createdAt: -1,
+  });
   res.json({ success: true, data: goals, total: goals.length });
 });
 
 /** GET /api/goals/:id */
 export const getOne = asyncHandler(async (req, res) => {
   const goal = await Goal.findById(req.params.id);
-  if (!goal) throw ApiError.notFound('היעד לא נמצא');
+  if (!goal) throw ApiError.notFound("היעד לא נמצא");
 
   // נציג/ה רשאי/ת לראות רק יעד אישי שלו/ה או יעד צוותי
-  if (req.scopeRepId && goal.scope !== 'team' && String(goal.rep) !== String(req.scopeRepId)) {
-    throw ApiError.forbidden('אין הרשאה לצפות ביעד זה');
+  if (
+    req.scopeRepId &&
+    goal.scope !== "team" &&
+    String(goal.rep) !== String(req.scopeRepId)
+  ) {
+    throw ApiError.forbidden("אין הרשאה לצפות ביעד זה");
   }
 
   res.json({ success: true, data: goal });
@@ -197,14 +215,18 @@ export const getOne = asyncHandler(async (req, res) => {
 export const create = asyncHandler(async (req, res) => {
   const data = pickGoalFields(req.body);
 
-  if (data.targetValue === undefined || data.targetValue === null || data.targetValue === '') {
-    throw ApiError.badRequest('חובה להזין ערך יעד (targetValue)');
+  if (
+    data.targetValue === undefined ||
+    data.targetValue === null ||
+    data.targetValue === ""
+  ) {
+    throw ApiError.badRequest("חובה להזין ערך יעד (targetValue)");
   }
   if (!data.startDate || !data.endDate) {
-    throw ApiError.badRequest('חובה להזין תאריך התחלה וסיום ליעד');
+    throw ApiError.badRequest("חובה להזין תאריך התחלה וסיום ליעד");
   }
   // יעד אישי מחייב נציג/ה; יעד צוותי מתעלם מ-rep
-  if (data.scope === 'team') data.rep = null;
+  if (data.scope === "team") data.rep = null;
 
   const goal = await Goal.create(data);
   res.status(201).json({ success: true, data: goal });
@@ -213,20 +235,20 @@ export const create = asyncHandler(async (req, res) => {
 /** PUT /api/goals/:id (manager) */
 export const update = asyncHandler(async (req, res) => {
   const data = pickGoalFields(req.body);
-  if (data.scope === 'team') data.rep = null;
+  if (data.scope === "team") data.rep = null;
 
   const goal = await Goal.findByIdAndUpdate(req.params.id, data, {
     new: true,
     runValidators: true,
   });
-  if (!goal) throw ApiError.notFound('היעד לא נמצא');
+  if (!goal) throw ApiError.notFound("היעד לא נמצא");
   res.json({ success: true, data: goal });
 });
 
 /** DELETE /api/goals/:id (manager) */
 export const remove = asyncHandler(async (req, res) => {
   const goal = await Goal.findByIdAndDelete(req.params.id);
-  if (!goal) throw ApiError.notFound('היעד לא נמצא');
+  if (!goal) throw ApiError.notFound("היעד לא נמצא");
   res.json({ success: true, data: goal });
 });
 
@@ -240,10 +262,10 @@ export const progress = asyncHandler(async (req, res) => {
 
   if (req.scopeRepId) {
     // נציג/ה: יעדים אישיים + צוותיים
-    filter.$or = [{ rep: toObjectId(req.scopeRepId) }, { scope: 'team' }];
+    filter.$or = [{ rep: toObjectId(req.scopeRepId) }, { scope: "team" }];
   } else if (req.query.repId) {
     // מנהל: סינון אופציונלי לנציג/ה ספציפי/ת (כולל יעדים צוותיים)
-    filter.$or = [{ rep: toObjectId(req.query.repId) }, { scope: 'team' }];
+    filter.$or = [{ rep: toObjectId(req.query.repId) }, { scope: "team" }];
   }
 
   const goals = await Goal.find(filter).sort({ endDate: -1, createdAt: -1 });

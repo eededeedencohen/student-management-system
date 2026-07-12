@@ -1,7 +1,7 @@
 # dependencies
 node_modules/
 
-# secrets — never commit real credentials (.env.example IS committed as a template)
+# secrets - never commit real credentials (.env.example IS committed as a template)
 .env
 .env.*.local
 

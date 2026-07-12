@@ -1,12 +1,12 @@
-import mongoose from 'mongoose';
-import Lead from '../models/Lead.js';
-import User from '../models/User.js';
-import asyncHandler from '../utils/asyncHandler.js';
-import ApiError from '../utils/ApiError.js';
-import { parseDateQuery } from '../utils/dateRanges.js';
+import mongoose from "mongoose";
+import Lead from "../models/Lead.js";
+import User from "../models/User.js";
+import asyncHandler from "../utils/asyncHandler.js";
+import ApiError from "../utils/ApiError.js";
+import { parseDateQuery } from "../utils/dateRanges.js";
 
 /**
- * Leads controller (/api/leads) — ניהול לידים לחישוב אחוזי סגירה.
+ * Leads controller (/api/leads) - ניהול לידים לחישוב אחוזי סגירה.
  * Reps see only their own leads (via scopeToRep -> req.scopeRepId);
  * managers see everything and may filter by ?repId/?rep.
  */
@@ -23,7 +23,7 @@ const resolveRepFilter = (req) => {
 /** Look up a rep's display name to denormalize onto the lead (repName). */
 const repNameFor = async (repId) => {
   if (!repId) return undefined;
-  const user = await User.findById(repId).select('name').lean();
+  const user = await User.findById(repId).select("name").lean();
   return user?.name;
 };
 
@@ -45,7 +45,10 @@ export const list = asyncHandler(async (req, res) => {
   if (dateFilter) filter.receivedDate = dateFilter;
 
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_LIMIT));
+  const limit = Math.min(
+    MAX_LIMIT,
+    Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_LIMIT),
+  );
 
   const [data, total] = await Promise.all([
     Lead.find(filter)
@@ -56,7 +59,13 @@ export const list = asyncHandler(async (req, res) => {
     Lead.countDocuments(filter),
   ]);
 
-  res.json({ success: true, data, total, page, pages: Math.ceil(total / limit) || 1 });
+  res.json({
+    success: true,
+    data,
+    total,
+    page,
+    pages: Math.ceil(total / limit) || 1,
+  });
 });
 
 /**
@@ -87,7 +96,9 @@ export const create = asyncHandler(async (req, res) => {
     // Aggregate mode: a bulk count of leads received in a period.
     const count = parseInt(body.count, 10);
     if (!Number.isFinite(count) || count <= 0) {
-      throw ApiError.badRequest('כמות לידים (count) חייבת להיות מספר חיובי במצב צבירה');
+      throw ApiError.badRequest(
+        "כמות לידים (count) חייבת להיות מספר חיובי במצב צבירה",
+      );
     }
     payload.isAggregate = true;
     payload.count = count;
@@ -101,11 +112,12 @@ export const create = asyncHandler(async (req, res) => {
 
 /** Load a lead enforcing rep scoping; throws notFound otherwise. */
 const findScoped = async (req) => {
-  if (!mongoose.isValidObjectId(req.params.id)) throw ApiError.notFound('ליד לא נמצא');
+  if (!mongoose.isValidObjectId(req.params.id))
+    throw ApiError.notFound("ליד לא נמצא");
   const filter = { _id: req.params.id };
   if (req.scopeRepId) filter.rep = req.scopeRepId; // reps may only touch their own
   const lead = await Lead.findOne(filter);
-  if (!lead) throw ApiError.notFound('ליד לא נמצא');
+  if (!lead) throw ApiError.notFound("ליד לא נמצא");
   return lead;
 };
 
@@ -118,17 +130,17 @@ export const update = asyncHandler(async (req, res) => {
   const body = req.body || {};
 
   const updatable = [
-    'name',
-    'phone',
-    'source',
-    'status',
-    'receivedDate',
-    'convertedRegistration',
-    'isAggregate',
-    'count',
-    'periodStart',
-    'periodEnd',
-    'notes',
+    "name",
+    "phone",
+    "source",
+    "status",
+    "receivedDate",
+    "convertedRegistration",
+    "isAggregate",
+    "count",
+    "periodStart",
+    "periodEnd",
+    "notes",
   ];
   for (const key of updatable) {
     if (body[key] !== undefined) lead[key] = body[key];
@@ -171,12 +183,16 @@ export const stats = asyncHandler(async (req, res) => {
     { $match: match },
     {
       $group: {
-        _id: '$rep',
-        repName: { $first: '$repName' },
+        _id: "$rep",
+        repName: { $first: "$repName" },
         // aggregates contribute their count; individuals contribute 1.
         leads: {
           $sum: {
-            $cond: [{ $eq: ['$isAggregate', true] }, { $ifNull: ['$count', 0] }, 1],
+            $cond: [
+              { $eq: ["$isAggregate", true] },
+              { $ifNull: ["$count", 0] },
+              1,
+            ],
           },
         },
         won: {
@@ -184,12 +200,20 @@ export const stats = asyncHandler(async (req, res) => {
             $cond: [
               {
                 $or: [
-                  { $eq: ['$status', 'won'] },
-                  { $ne: [{ $ifNull: ['$convertedRegistration', null] }, null] },
+                  { $eq: ["$status", "won"] },
+                  {
+                    $ne: [{ $ifNull: ["$convertedRegistration", null] }, null],
+                  },
                 ],
               },
               // a won aggregate counts its full count, otherwise 1
-              { $cond: [{ $eq: ['$isAggregate', true] }, { $ifNull: ['$count', 0] }, 1] },
+              {
+                $cond: [
+                  { $eq: ["$isAggregate", true] },
+                  { $ifNull: ["$count", 0] },
+                  1,
+                ],
+              },
               0,
             ],
           },
@@ -199,12 +223,12 @@ export const stats = asyncHandler(async (req, res) => {
     {
       $project: {
         _id: 0,
-        repId: '$_id',
+        repId: "$_id",
         repName: 1,
         leads: 1,
         won: 1,
         closeRate: {
-          $cond: [{ $gt: ['$leads', 0] }, { $divide: ['$won', '$leads'] }, 0],
+          $cond: [{ $gt: ["$leads", 0] }, { $divide: ["$won", "$leads"] }, 0],
         },
       },
     },

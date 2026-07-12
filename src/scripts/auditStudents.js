@@ -1,12 +1,12 @@
 /** Coherence audit over EVERY student: money invariant, plan coverage, orphan markers. */
-import path from 'path';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
+import path from "path";
+import { fileURLToPath } from "url";
+import dotenv from "dotenv";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-const { connectDB, disconnectDB } = await import('../config/db.js');
-const { default: Registration } = await import('../models/Registration.js');
-const { parseInstallmentMarker } = await import('../utils/normalize.js');
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+const { connectDB, disconnectDB } = await import("../config/db.js");
+const { default: Registration } = await import("../models/Registration.js");
+const { parseInstallmentMarker } = await import("../utils/normalize.js");
 
 await connectDB();
 const regs = await Registration.find({}).lean();
@@ -19,10 +19,11 @@ for (const r of regs) {
 }
 
 const flags = { money: [], planMiss: [], orphanMarker: [], nonFixed: [] };
-let adhoc = 0, coherent = 0;
+let adhoc = 0,
+  coherent = 0;
 
 for (const [, g] of byStudent) {
-  const deals = g.recs.filter((r) => r.recordType === 'registration');
+  const deals = g.recs.filter((r) => r.recordType === "registration");
   const markers = g.recs.filter((r) => parseInstallmentMarker(r.courseRaw));
   let studentOk = true;
 
@@ -31,22 +32,31 @@ for (const [, g] of byStudent) {
     const paid = d.totalPaid || 0;
     const out = d.outstanding || 0;
     if (t > 0 && Math.abs(paid + out - t) > 1) {
-      flags.money.push(`${g.name} · ${d.courseRaw} · total ${t} paid ${paid} out ${out}`);
+      flags.money.push(
+        `${g.name} · ${d.courseRaw} · total ${t} paid ${paid} out ${out}`,
+      );
       studentOk = false;
     }
     const plan = d.installmentPlan || [];
     if (out > 0.5) {
-      const isInstallmentMethod = d.paymentCategory === 'credit' || d.paymentCategory === 'ern';
+      const isInstallmentMethod =
+        d.paymentCategory === "credit" || d.paymentCategory === "ern";
       if (!plan.length && isInstallmentMethod && (d.installments || 0) > 1) {
-        flags.planMiss.push(`${g.name} · ${d.courseRaw} · ${d.paymentCategory} ×${d.installments} · out ${Math.round(out)}`);
+        flags.planMiss.push(
+          `${g.name} · ${d.courseRaw} · ${d.paymentCategory} ×${d.installments} · out ${Math.round(out)}`,
+        );
         studentOk = false;
       } else if (!plan.length) {
-        adhoc += 1; // genuine ad-hoc (transfer/cash/no count) — handled by the page
+        adhoc += 1; // genuine ad-hoc (transfer/cash/no count) - handled by the page
       }
       if (plan.length) {
-        const pend = plan.filter((p) => p.status !== 'paid').reduce((s, p) => s + (p.amount || 0), 0);
+        const pend = plan
+          .filter((p) => p.status !== "paid")
+          .reduce((s, p) => s + (p.amount || 0), 0);
         if (Math.abs(pend - out) > 50) {
-          flags.nonFixed.push(`${g.name} · ${d.courseRaw} · pending ${Math.round(pend)} vs out ${Math.round(out)}`);
+          flags.nonFixed.push(
+            `${g.name} · ${d.courseRaw} · pending ${Math.round(pend)} vs out ${Math.round(out)}`,
+          );
         }
       }
     }
@@ -57,28 +67,42 @@ for (const [, g] of byStudent) {
     const mk = parseInstallmentMarker(m.courseRaw);
     const covered = mk.indices.every((ix) =>
       deals.some((d) =>
-        (d.installmentPlan || []).some((p) => p.index === ix && p.count === mk.count && p.status === 'paid')
-      )
+        (d.installmentPlan || []).some(
+          (p) => p.index === ix && p.count === mk.count && p.status === "paid",
+        ),
+      ),
     );
     if (!covered) {
-      flags.orphanMarker.push(`${g.name} · ${m.courseRaw} (row ${m.sourceRow}) not reflected in a plan`);
+      flags.orphanMarker.push(
+        `${g.name} · ${m.courseRaw} (row ${m.sourceRow}) not reflected in a plan`,
+      );
       studentOk = false;
     }
   }
   if (studentOk) coherent += 1;
 }
 
-const show = (arr) => arr.slice(0, 15).forEach((x) => console.log('     • ' + x));
-console.log('\n================ STUDENT COHERENCE AUDIT ================');
-console.log('students:', byStudent.size, '| fully coherent:', coherent);
-console.log('genuine ad-hoc balances (transfer/cash/no-plan, page-handled):', adhoc);
+const show = (arr) =>
+  arr.slice(0, 15).forEach((x) => console.log("     • " + x));
+console.log("\n================ STUDENT COHERENCE AUDIT ================");
+console.log("students:", byStudent.size, "| fully coherent:", coherent);
+console.log(
+  "genuine ad-hoc balances (transfer/cash/no-plan, page-handled):",
+  adhoc,
+);
 console.log(`\n⚑ MONEY invariant breaks: ${flags.money.length}`);
 show(flags.money);
-console.log(`\n⚑ PLAN MISSING (credit/ERN installment deal, owing, no plan): ${flags.planMiss.length}`);
+console.log(
+  `\n⚑ PLAN MISSING (credit/ERN installment deal, owing, no plan): ${flags.planMiss.length}`,
+);
 show(flags.planMiss);
-console.log(`\n⚑ ORPHAN MARKERS (collected installment not linked to a plan): ${flags.orphanMarker.length}`);
+console.log(
+  `\n⚑ ORPHAN MARKERS (collected installment not linked to a plan): ${flags.orphanMarker.length}`,
+);
 show(flags.orphanMarker);
-console.log(`\nℹ NON-FIXED remainders (plan pending != outstanding ±50): ${flags.nonFixed.length}`);
+console.log(
+  `\nℹ NON-FIXED remainders (plan pending != outstanding ±50): ${flags.nonFixed.length}`,
+);
 show(flags.nonFixed);
 
 await disconnectDB();

@@ -1,21 +1,21 @@
-import Registration from '../models/Registration.js';
-import Student from '../models/Student.js';
-import User from '../models/User.js';
-import Course from '../models/Course.js';
-import Lead from '../models/Lead.js';
-import asyncHandler from '../utils/asyncHandler.js';
-import ApiError from '../utils/ApiError.js';
-import { parseDateQuery } from '../utils/dateRanges.js';
-import { applySince } from '../utils/dataScope.js';
+import Registration from "../models/Registration.js";
+import Student from "../models/Student.js";
+import User from "../models/User.js";
+import Course from "../models/Course.js";
+import Lead from "../models/Lead.js";
+import asyncHandler from "../utils/asyncHandler.js";
+import ApiError from "../utils/ApiError.js";
+import { parseDateQuery } from "../utils/dateRanges.js";
+import { applySince } from "../utils/dataScope.js";
 import {
   parseNumber,
   parsePaymentMethod,
   splitName,
   cleanStr,
-} from '../utils/normalize.js';
+} from "../utils/normalize.js";
 
 /** Escape a user string so it can be safely used inside a RegExp. */
-const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Clamp pagination params: page>=1, 1<=limit<=500 (default 50). */
 const paging = (query) => {
@@ -25,7 +25,14 @@ const paging = (query) => {
 };
 
 /** Whitelist of sortable fields (?sortBy=) so clients can't sort by arbitrary keys. */
-const SORT_FIELDS = ['dealDate', 'sourceRow', 'totalAmount', 'outstanding', 'studentName', 'createdAt'];
+const SORT_FIELDS = [
+  "dealDate",
+  "sourceRow",
+  "totalAmount",
+  "outstanding",
+  "studentName",
+  "createdAt",
+];
 
 /**
  * Build a Mongo sort spec from ?sortBy/?order. Default: newest deals first.
@@ -34,9 +41,9 @@ const SORT_FIELDS = ['dealDate', 'sourceRow', 'totalAmount', 'outstanding', 'stu
  */
 const buildSort = (query) => {
   const by = SORT_FIELDS.includes(query.sortBy) ? query.sortBy : null;
-  const dir = query.order === 'asc' ? 1 : -1;
+  const dir = query.order === "asc" ? 1 : -1;
   if (!by) return { dealDate: -1, createdAt: -1 };
-  if (by === 'sourceRow') return { sourceRow: dir, sourceFile: dir, _id: 1 };
+  if (by === "sourceRow") return { sourceRow: dir, sourceFile: dir, _id: 1 };
   return { [by]: dir, _id: 1 };
 };
 
@@ -61,21 +68,22 @@ export const list = asyncHandler(async (req, res) => {
   if (req.query.courseField) filter.courseField = req.query.courseField;
   if (req.query.paymentStatus) {
     filter.paymentStatus = req.query.paymentStatus;
-    // סינון לפי סטטוס תשלום מדבר על עסקאות אמת — עסקה מבוטלת (יתרה 0 דרך writeOff)
+    // סינון לפי סטטוס תשלום מדבר על עסקאות אמת - עסקה מבוטלת (יתרה 0 דרך writeOff)
     // לא "שולמה"; מי שרוצה מבוטלות בוחר סוג רשומה "מבוטל" במפורש.
-    if (!req.query.recordType) filter.recordType = { $nin: ['cancelled', 'refund'] };
+    if (!req.query.recordType)
+      filter.recordType = { $nin: ["cancelled", "refund"] };
   }
   if (req.query.recordType) filter.recordType = req.query.recordType;
   if (req.query.needsReview !== undefined) {
-    filter.needsReview = req.query.needsReview === 'true';
+    filter.needsReview = req.query.needsReview === "true";
   }
   // ?reconciled=false → only deals whose payments don't reconcile (paid+future ≠ total)
-  if (req.query.reconciled === 'false') filter.reconciled = false;
+  if (req.query.reconciled === "false") filter.reconciled = false;
   if (req.query.q) {
-    filter.studentName = { $regex: escapeRegex(req.query.q), $options: 'i' };
+    filter.studentName = { $regex: escapeRegex(req.query.q), $options: "i" };
   }
 
-  // תאריך עסקה — date filter on dealDate when from/to/period supplied
+  // תאריך עסקה - date filter on dealDate when from/to/period supplied
   const dateFilter = parseDateQuery(req.query);
   if (dateFilter) filter.dealDate = dateFilter;
   applySince(req, filter); // מוד "מ-2026 בלבד"
@@ -87,8 +95,8 @@ export const list = asyncHandler(async (req, res) => {
       .sort(buildSort(req.query)) // default newest first; ?sortBy=sourceRow&order=asc
       .skip(skip)
       .limit(limit)
-      .populate('rep', 'name')
-      .populate('course', 'name field'),
+      .populate("rep", "name")
+      .populate("course", "name field"),
     Registration.countDocuments(filter),
   ]);
 
@@ -103,7 +111,7 @@ export const list = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/registrations/debtors
- * חייבים — registrations with outstanding>0 regardless of recordType
+ * חייבים - registrations with outstanding>0 regardless of recordType
  * (intentionally includes advertising/collection_followup/other, per convention #6,
  * since this endpoint is explicitly about outstanding balances). Rep-scoped.
  */
@@ -120,23 +128,23 @@ export const debtors = asyncHandler(async (req, res) => {
 
   const data = await Registration.find(filter)
     .sort({ outstanding: -1 })
-    .populate('rep', 'name')
-    .populate('course', 'name field');
+    .populate("rep", "name")
+    .populate("course", "name field");
 
   res.json({ success: true, data });
 });
 
-/** GET /api/registrations/:id — populate rep, course, student. */
+/** GET /api/registrations/:id - populate rep, course, student. */
 export const detail = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id)
-    .populate('rep', 'name')
-    .populate('course', 'name field')
-    .populate('student');
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+    .populate("rep", "name")
+    .populate("course", "name field")
+    .populate("student");
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
 
   // reps may only view their own registrations
   if (req.scopeRepId && String(reg.rep?._id || reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אין הרשאה לצפות ברישום זה');
+    throw ApiError.forbidden("אין הרשאה לצפות ברישום זה");
   }
 
   res.json({ success: true, data: reg });
@@ -150,7 +158,7 @@ export const detail = asyncHandler(async (req, res) => {
 const nextStudentNumber = async () => {
   const top = await Student.findOne({ studentNumber: { $ne: null } })
     .sort({ studentNumber: -1 })
-    .select('studentNumber')
+    .select("studentNumber")
     .lean();
   return (top?.studentNumber || 0) + 1;
 };
@@ -207,7 +215,7 @@ export const create = asyncHandler(async (req, res) => {
   // --- repName: resolve from rep user when possible ---
   let repName = cleanStr(body.repName);
   if (repId) {
-    const repUser = await User.findById(repId).select('name');
+    const repUser = await User.findById(repId).select("name");
     if (repUser) repName = repUser.name;
   }
 
@@ -215,45 +223,77 @@ export const create = asyncHandler(async (req, res) => {
   // total & status are DERIVED from the payments list (see recompute); the client
   // guarantees Σpayments = course price × (1 − discount).
   if (Number(body.schemaVersion) === 2) {
-    const uid = req.user?._id && req.user._id !== 'admin-token' ? req.user._id : undefined;
-    const uname = req.user?.name || '';
-    const METHODS = ['credit', 'ern', 'cash', 'transfer', 'financing', 'combined', 'other'];
-    const TYPES = ['advance', 'installment', 'one_time'];
+    const uid =
+      req.user?._id && req.user._id !== "admin-token"
+        ? req.user._id
+        : undefined;
+    const uname = req.user?.name || "";
+    const METHODS = [
+      "credit",
+      "ern",
+      "cash",
+      "transfer",
+      "financing",
+      "combined",
+      "other",
+    ];
+    const TYPES = ["advance", "installment", "one_time"];
 
     let courseDoc = null;
-    if (body.course) courseDoc = await Course.findById(body.course).select('name field cohortLabel');
+    if (body.course)
+      courseDoc = await Course.findById(body.course).select(
+        "name field cohortLabel",
+      );
 
-    const payments = (Array.isArray(body.payments) ? body.payments : []).map((p) => {
-      const paid = Boolean(p.paid);
-      const method = METHODS.includes(p.method) ? p.method : 'credit';
-      return {
-        type: TYPES.includes(p.type) ? p.type : 'one_time',
-        amount: parseNumber(p.amount),
-        method,
-        methodCategory: method,
-        dueDate: p.dueDate ? new Date(p.dueDate) : undefined,
-        paid,
-        // פריסת אשראי מגיעה מהטופס כרשומה אחת משולמת עם מספר התשלומים כמטא-נתון
-        installments: p.installments ? parseNumber(p.installments) : undefined,
-        note: cleanStr(p.label) || undefined,
-        confirmedBy: paid ? uid : undefined,
-        confirmedByName: paid ? uname : undefined,
-        confirmedAt: paid ? new Date() : undefined,
-      };
-    });
+    const payments = (Array.isArray(body.payments) ? body.payments : []).map(
+      (p) => {
+        const paid = Boolean(p.paid);
+        const method = METHODS.includes(p.method) ? p.method : "credit";
+        return {
+          type: TYPES.includes(p.type) ? p.type : "one_time",
+          amount: parseNumber(p.amount),
+          method,
+          methodCategory: method,
+          dueDate: p.dueDate ? new Date(p.dueDate) : undefined,
+          paid,
+          // פריסת אשראי מגיעה מהטופס כרשומה אחת משולמת עם מספר התשלומים כמטא-נתון
+          installments: p.installments
+            ? parseNumber(p.installments)
+            : undefined,
+          note: cleanStr(p.label) || undefined,
+          confirmedBy: paid ? uid : undefined,
+          confirmedByName: paid ? uname : undefined,
+          confirmedAt: paid ? new Date() : undefined,
+        };
+      },
+    );
 
     // dominant category for cash-flow (which reads deal.paymentCategory)
     const catCount = {};
-    for (const p of payments) if (p.method) catCount[p.method] = (catCount[p.method] || 0) + 1;
-    const dominant = Object.entries(catCount).sort((a, b) => b[1] - a[1])[0]?.[0];
+    for (const p of payments)
+      if (p.method) catCount[p.method] = (catCount[p.method] || 0) + 1;
+    const dominant = Object.entries(catCount).sort(
+      (a, b) => b[1] - a[1],
+    )[0]?.[0];
 
     const noteEntries = [];
     const noteText = cleanStr(body.notes);
-    if (noteText) noteEntries.push({ text: noteText, date: new Date(), by: uid, byName: uname });
+    if (noteText)
+      noteEntries.push({
+        text: noteText,
+        date: new Date(),
+        by: uid,
+        byName: uname,
+      });
     if (Array.isArray(body.noteEntries)) {
       for (const n of body.noteEntries) {
         const t = cleanStr(n.text);
-        if (t) noteEntries.push({ text: t, date: n.date ? new Date(n.date) : new Date(), byName: cleanStr(n.byName) });
+        if (t)
+          noteEntries.push({
+            text: t,
+            date: n.date ? new Date(n.date) : new Date(),
+            byName: cleanStr(n.byName),
+          });
       }
     }
 
@@ -273,7 +313,7 @@ export const create = asyncHandler(async (req, res) => {
       payments,
       paymentCategory: dominant,
       noteEntries,
-      recordType: 'registration',
+      recordType: "registration",
     });
     reg.recompute(); // derives totalAmount/totalPaid/outstanding/status/nextPaymentDate
     await reg.save();
@@ -282,7 +322,7 @@ export const create = asyncHandler(async (req, res) => {
     if (body.lead) {
       const lead = await Lead.findById(body.lead);
       if (lead && (!req.scopeRepId || String(lead.rep) === req.scopeRepId)) {
-        lead.status = 'won';
+        lead.status = "won";
         lead.convertedRegistration = reg._id;
         await lead.save();
       }
@@ -310,21 +350,30 @@ export const create = asyncHandler(async (req, res) => {
     dateAssumed: Boolean(body.dateAssumed),
 
     totalAmount: parseNumber(body.totalAmount),
-    amountExVat: body.amountExVat !== undefined ? parseNumber(body.amountExVat) : undefined,
-    vatAmount: body.vatAmount !== undefined ? parseNumber(body.vatAmount) : undefined,
+    amountExVat:
+      body.amountExVat !== undefined
+        ? parseNumber(body.amountExVat)
+        : undefined,
+    vatAmount:
+      body.vatAmount !== undefined ? parseNumber(body.vatAmount) : undefined,
     advancePaid: parseNumber(body.advancePaid),
     balanceDue: parseNumber(body.balanceDue),
     finalBalance: parseNumber(body.finalBalance),
     payments: Array.isArray(body.payments) ? body.payments : [],
     primaryPaymentMethod: pm.raw || cleanStr(body.primaryPaymentMethod),
     paymentCategory: pm.category || body.paymentCategory,
-    installments: body.installments !== undefined ? parseNumber(body.installments) : pm.installments,
-    nextPaymentDate: body.nextPaymentDate ? new Date(body.nextPaymentDate) : undefined,
+    installments:
+      body.installments !== undefined
+        ? parseNumber(body.installments)
+        : pm.installments,
+    nextPaymentDate: body.nextPaymentDate
+      ? new Date(body.nextPaymentDate)
+      : undefined,
     nextPaymentNote: cleanStr(body.nextPaymentNote),
 
     checklist: body.checklist || {},
 
-    recordType: body.recordType || 'registration',
+    recordType: body.recordType || "registration",
     needsReview: Boolean(body.needsReview),
     notes: cleanStr(body.notes),
   });
@@ -341,41 +390,41 @@ export const create = asyncHandler(async (req, res) => {
  */
 export const update = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
 
   // reps may only edit their own registrations
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אין הרשאה לערוך רישום זה');
+    throw ApiError.forbidden("אין הרשאה לערוך רישום זה");
   }
 
   const body = req.body || {};
 
   // fields that, when present, trigger a money/status recompute
   const moneyFields = [
-    'totalAmount',
-    'amountExVat',
-    'vatAmount',
-    'advancePaid',
-    'balanceDue',
-    'finalBalance',
-    'payments',
-    'checklist',
+    "totalAmount",
+    "amountExVat",
+    "vatAmount",
+    "advancePaid",
+    "balanceDue",
+    "finalBalance",
+    "payments",
+    "checklist",
   ];
 
   // simple string/ref fields that can be overwritten directly
   const directFields = [
-    'studentName',
-    'idNumber',
-    'registeredByRaw',
-    'courseRaw',
-    'courseField',
-    'cohortLabel',
-    'dealDateRaw',
-    'primaryPaymentMethod',
-    'paymentCategory',
-    'nextPaymentNote',
-    'recordType',
-    'notes',
+    "studentName",
+    "idNumber",
+    "registeredByRaw",
+    "courseRaw",
+    "courseField",
+    "cohortLabel",
+    "dealDateRaw",
+    "primaryPaymentMethod",
+    "paymentCategory",
+    "nextPaymentNote",
+    "recordType",
+    "notes",
   ];
 
   let needsRecompute = false;
@@ -387,18 +436,26 @@ export const update = asyncHandler(async (req, res) => {
   // refs / scalars handled explicitly
   if (body.student !== undefined) reg.student = body.student || undefined;
   if (body.course !== undefined) reg.course = body.course || undefined;
-  if (body.installments !== undefined) reg.installments = parseNumber(body.installments);
-  if (body.dateAssumed !== undefined) reg.dateAssumed = Boolean(body.dateAssumed);
-  if (body.needsReview !== undefined) reg.needsReview = Boolean(body.needsReview);
-  if (body.dealDate !== undefined) reg.dealDate = body.dealDate ? new Date(body.dealDate) : undefined;
+  if (body.installments !== undefined)
+    reg.installments = parseNumber(body.installments);
+  if (body.dateAssumed !== undefined)
+    reg.dateAssumed = Boolean(body.dateAssumed);
+  if (body.needsReview !== undefined)
+    reg.needsReview = Boolean(body.needsReview);
+  if (body.dealDate !== undefined)
+    reg.dealDate = body.dealDate ? new Date(body.dealDate) : undefined;
   if (body.nextPaymentDate !== undefined) {
-    reg.nextPaymentDate = body.nextPaymentDate ? new Date(body.nextPaymentDate) : undefined;
+    reg.nextPaymentDate = body.nextPaymentDate
+      ? new Date(body.nextPaymentDate)
+      : undefined;
   }
 
-  // rep change (managers only — reps are scoped to themselves)
+  // rep change (managers only - reps are scoped to themselves)
   if (body.rep !== undefined && !req.scopeRepId) {
     reg.rep = body.rep || undefined;
-    const repUser = body.rep ? await User.findById(body.rep).select('name') : null;
+    const repUser = body.rep
+      ? await User.findById(body.rep).select("name")
+      : null;
     reg.repName = repUser ? repUser.name : cleanStr(body.repName);
   } else if (body.repName !== undefined && !req.scopeRepId) {
     reg.repName = cleanStr(body.repName);
@@ -408,8 +465,15 @@ export const update = asyncHandler(async (req, res) => {
   for (const f of moneyFields) {
     if (body[f] === undefined) continue;
     needsRecompute = true;
-    if (f === 'payments') reg.payments = Array.isArray(body.payments) ? body.payments : reg.payments;
-    else if (f === 'checklist') reg.checklist = { ...(reg.checklist?.toObject?.() || reg.checklist), ...body.checklist };
+    if (f === "payments")
+      reg.payments = Array.isArray(body.payments)
+        ? body.payments
+        : reg.payments;
+    else if (f === "checklist")
+      reg.checklist = {
+        ...(reg.checklist?.toObject?.() || reg.checklist),
+        ...body.checklist,
+      };
     else reg[f] = parseNumber(body[f]);
   }
 
@@ -425,15 +489,15 @@ export const update = asyncHandler(async (req, res) => {
  */
 export const addPayment = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
 
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אין הרשאה לעדכן רישום זה');
+    throw ApiError.forbidden("אין הרשאה לעדכן רישום זה");
   }
 
   const { amount, method, date, kind, note } = req.body || {};
   const amt = parseNumber(amount);
-  if (!amt || amt <= 0) throw ApiError.badRequest('יש להזין סכום תשלום חיובי');
+  if (!amt || amt <= 0) throw ApiError.badRequest("יש להזין סכום תשלום חיובי");
 
   const pm = parsePaymentMethod(method);
   reg.payments.push({
@@ -443,7 +507,7 @@ export const addPayment = asyncHandler(async (req, res) => {
     installments: pm.installments,
     date: date ? new Date(date) : new Date(),
     note: cleanStr(note),
-    kind: ['advance', 'balance', 'extra'].includes(kind) ? kind : 'balance',
+    kind: ["advance", "balance", "extra"].includes(kind) ? kind : "balance",
   });
 
   reg.recompute();
@@ -458,17 +522,17 @@ export const addPayment = asyncHandler(async (req, res) => {
  */
 export const updateChecklist = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
 
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אין הרשאה לעדכן רישום זה');
+    throw ApiError.forbidden("אין הרשאה לעדכן רישום זה");
   }
 
   const allowed = [
-    'signedTakanon',
-    'addedToCourseWhatsapp',
-    'addedToAlumniWhatsapp',
-    'invoiceIssued',
+    "signedTakanon",
+    "addedToCourseWhatsapp",
+    "addedToAlumniWhatsapp",
+    "invoiceIssued",
   ];
   const current = reg.checklist?.toObject?.() || reg.checklist || {};
   const merged = { ...current };
@@ -490,31 +554,34 @@ export const updateChecklist = asyncHandler(async (req, res) => {
  */
 export const confirmInstallment = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אפשר לאשר תשלומים רק בעסקאות שלך');
+    throw ApiError.forbidden("אפשר לאשר תשלומים רק בעסקאות שלך");
   }
   const idx = parseInt(req.params.index, 10);
   const item = (reg.installmentPlan || []).find((it) => it.index === idx);
-  if (!item) throw ApiError.notFound('התשלום לא נמצא בלוח');
+  if (!item) throw ApiError.notFound("התשלום לא נמצא בלוח");
 
-  if (item.status !== 'paid') {
-    const amount = req.body?.amount != null ? Number(req.body.amount) : item.amount;
+  if (item.status !== "paid") {
+    const amount =
+      req.body?.amount != null ? Number(req.body.amount) : item.amount;
     const date = req.body?.date ? new Date(req.body.date) : new Date();
-    item.status = 'paid';
+    item.status = "paid";
     item.paidAt = date;
     item.amount = amount || item.amount;
     item.confirmedBy =
-      req.user?._id && req.user._id !== 'admin-token' ? req.user._id : undefined;
-    item.confirmedByName = req.user?.name || '';
+      req.user?._id && req.user._id !== "admin-token"
+        ? req.user._id
+        : undefined;
+    item.confirmedByName = req.user?.name || "";
     reg.payments.push({
       amount: item.amount,
       method: item.method,
       methodCategory: item.method,
       date,
-      kind: 'balance',
+      kind: "balance",
       note: `אישור תשלום ${item.label}`,
-      source: `אישור ידני במערכת · ${req.user?.name || 'משתמש'} · ${new Date().toISOString().slice(0, 10)}`,
+      source: `אישור ידני במערכת · ${req.user?.name || "משתמש"} · ${new Date().toISOString().slice(0, 10)}`,
     });
     reg.recompute();
     await reg.save();
@@ -522,22 +589,22 @@ export const confirmInstallment = asyncHandler(async (req, res) => {
   res.json({ success: true, data: reg });
 });
 
-/** PATCH /api/registrations/:id/installments/:index/unconfirm — undo a confirmation. */
+/** PATCH /api/registrations/:id/installments/:index/unconfirm - undo a confirmation. */
 export const unconfirmInstallment = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אפשר לעדכן תשלומים רק בעסקאות שלך');
+    throw ApiError.forbidden("אפשר לעדכן תשלומים רק בעסקאות שלך");
   }
   const idx = parseInt(req.params.index, 10);
   const item = (reg.installmentPlan || []).find((it) => it.index === idx);
-  if (!item) throw ApiError.notFound('התשלום לא נמצא בלוח');
+  if (!item) throw ApiError.notFound("התשלום לא נמצא בלוח");
 
-  if (item.status === 'paid') {
+  if (item.status === "paid") {
     const note = `אישור תשלום ${item.label}`;
     const pi = reg.payments.findIndex((p) => p.note === note);
     if (pi >= 0) reg.payments.splice(pi, 1);
-    item.status = 'pending';
+    item.status = "pending";
     item.paidAt = undefined;
     item.confirmedBy = undefined;
     item.confirmedByName = undefined;
@@ -554,16 +621,19 @@ export const unconfirmInstallment = asyncHandler(async (req, res) => {
  */
 export const markPaymentPaid = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('העסקה לא נמצאה');
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אפשר לאשר תשלומים רק בעסקאות שלך');
+    throw ApiError.forbidden("אפשר לאשר תשלומים רק בעסקאות שלך");
   }
   const p = reg.payments.id(req.params.paymentId);
-  if (!p) throw ApiError.notFound('התשלום לא נמצא');
+  if (!p) throw ApiError.notFound("התשלום לא נמצא");
   if (!p.paid) {
     p.paid = true;
-    p.confirmedBy = req.user?._id && req.user._id !== 'admin-token' ? req.user._id : undefined;
-    p.confirmedByName = req.user?.name || '';
+    p.confirmedBy =
+      req.user?._id && req.user._id !== "admin-token"
+        ? req.user._id
+        : undefined;
+    p.confirmedByName = req.user?.name || "";
     p.confirmedAt = new Date();
     if (req.body?.date) p.date = new Date(req.body.date);
     if (req.body?.amount != null) p.amount = Number(req.body.amount);
@@ -573,15 +643,15 @@ export const markPaymentPaid = asyncHandler(async (req, res) => {
   res.json({ success: true, data: reg });
 });
 
-/** PATCH /api/registrations/:id/payments/:paymentId/unpay — undo "סמן כשולם". */
+/** PATCH /api/registrations/:id/payments/:paymentId/unpay - undo "סמן כשולם". */
 export const unmarkPaymentPaid = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('העסקה לא נמצאה');
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אפשר לעדכן תשלומים רק בעסקאות שלך');
+    throw ApiError.forbidden("אפשר לעדכן תשלומים רק בעסקאות שלך");
   }
   const p = reg.payments.id(req.params.paymentId);
-  if (!p) throw ApiError.notFound('התשלום לא נמצא');
+  if (!p) throw ApiError.notFound("התשלום לא נמצא");
   if (p.paid) {
     p.paid = false;
     p.confirmedBy = undefined;
@@ -596,10 +666,10 @@ export const unmarkPaymentPaid = asyncHandler(async (req, res) => {
 /** DELETE /api/registrations/:id */
 export const remove = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
-  if (!reg) throw ApiError.notFound('הרישום לא נמצא');
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
 
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
-    throw ApiError.forbidden('אין הרשאה למחוק רישום זה');
+    throw ApiError.forbidden("אין הרשאה למחוק רישום זה");
   }
 
   await reg.deleteOne();

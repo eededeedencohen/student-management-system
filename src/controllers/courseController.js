@@ -1,12 +1,12 @@
-import asyncHandler from '../utils/asyncHandler.js';
-import ApiError from '../utils/ApiError.js';
-import Course from '../models/Course.js';
-import Registration from '../models/Registration.js';
-import { buildCourseIndex, matchDealToCourse } from '../utils/courseMatch.js';
-import { applySince, sinceOf } from '../utils/dataScope.js';
+import asyncHandler from "../utils/asyncHandler.js";
+import ApiError from "../utils/ApiError.js";
+import Course from "../models/Course.js";
+import Registration from "../models/Registration.js";
+import { buildCourseIndex, matchDealToCourse } from "../utils/courseMatch.js";
+import { applySince, sinceOf } from "../utils/dataScope.js";
 
 /**
- * בקר קורסים — ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.
+ * בקר קורסים - ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.
  *
  * שיוך נרשמים: העסקה (רישום) היא ליטרלי ההרשמה לקורס, ולכן כל מי שביצע עסקה
  * (גם אם שילם רק מקדמה) משובץ לקורס. מיכל/מורן נתנו לקורסים שמות חופשיים ולא
@@ -14,7 +14,6 @@ import { applySince, sinceOf } from '../utils/dataScope.js';
  *   FK → מחזור מפורש → רמז חודש עברי ("מאי") → קרבת תאריך עסקה לתחילת מחזור → מחזור יחיד.
  * עסקאות שאין להן מחזור קיים (בעיקר מחזורי 2024/2025 ישנים) נשארות "לא משויכות".
  */
-
 
 /** סכומי כסף לקורס מתוך עסקאות הרישום שלו. */
 function courseMoney(dealsOfCourse) {
@@ -27,12 +26,18 @@ function courseMoney(dealsOfCourse) {
     outstanding += d.outstanding || 0;
   }
   const r2 = (n) => Math.round(n * 100) / 100;
-  return { salesAmount: r2(salesAmount), collected: r2(collected), outstanding: r2(outstanding) };
+  return {
+    salesAmount: r2(salesAmount),
+    collected: r2(collected),
+    outstanding: r2(outstanding),
+  };
 }
 
-/** מחזורים ישנים רבים נשמרו בלי תאריכים כלל — תווית המחזור ("11/25") היא רמז התאריך היחיד. */
+/** מחזורים ישנים רבים נשמרו בלי תאריכים כלל - תווית המחזור ("11/25") היא רמז התאריך היחיד. */
 function cohortEdge(course) {
-  const m = /(\d{1,2})\s*\/\s*(\d{2,4})/.exec(course.cohortLabel || course.name || '');
+  const m = /(\d{1,2})\s*\/\s*(\d{2,4})/.exec(
+    course.cohortLabel || course.name || "",
+  );
   if (!m) return null;
   const month = Number(m[1]);
   const yr = Number(m[2]);
@@ -45,7 +50,7 @@ function courseVisibleSince(req, course, enrolledCount) {
   const since = sinceOf(req);
   if (!since) return true;
   const edge = course.endDate || course.startDate || cohortEdge(course);
-  // אין תאריכים וגם אין רמז מחזור (קורס חדש שרק נוצר) — תמיד גלוי, אחרת
+  // אין תאריכים וגם אין רמז מחזור (קורס חדש שרק נוצר) - תמיד גלוי, אחרת
   // הוא היה נעלם מהרשימה מיד אחרי היצירה (עוד אין לו נרשמים).
   if (!edge) return true;
   if (new Date(edge) >= since) return true;
@@ -54,7 +59,7 @@ function courseVisibleSince(req, course, enrolledCount) {
 
 /** Fields we need from a deal to show it in a course roster. */
 const ROSTER_FIELDS =
-  'student studentName paymentStatus totalAmount totalPaid outstanding dealDate rep repName schemaVersion courseRaw';
+  "student studentName paymentStatus totalAmount totalPaid outstanding dealDate rep repName schemaVersion courseRaw";
 
 /**
  * Compute the deal→course assignment once over ALL current-enrolment deals.
@@ -65,10 +70,10 @@ const ROSTER_FIELDS =
 async function computeEnrollment(req) {
   const courses = await Course.find({}).lean();
   const index = buildCourseIndex(courses);
-  const dealsFilter = { recordType: 'registration' };
+  const dealsFilter = { recordType: "registration" };
   if (req) applySince(req, dealsFilter); // מוד "מ-2026 בלבד"
   const deals = await Registration.find(dealsFilter)
-    .select(ROSTER_FIELDS + ' course coursesAll courseField cohortLabel')
+    .select(ROSTER_FIELDS + " course coursesAll courseField cohortLabel")
     .lean();
 
   const byCourse = new Map();
@@ -78,10 +83,12 @@ async function computeEnrollment(req) {
   };
   let unassigned = 0;
   for (const d of deals) {
-    // explicit multi-course link (combined deal) — enroll in each listed course
-    const all = (d.coursesAll || []).map(String).filter((id) => index.byId.has(id));
+    // explicit multi-course link (combined deal) - enroll in each listed course
+    const all = (d.coursesAll || [])
+      .map(String)
+      .filter((id) => index.byId.has(id));
     if (all.length) {
-      for (const id of all) push(id, d, 'fk-multi');
+      for (const id of all) push(id, d, "fk-multi");
       continue;
     }
     const m = matchDealToCourse(d, index);
@@ -112,7 +119,11 @@ export const list = asyncHandler(async (req, res) => {
   const withCounts = data
     .map((c) => {
       const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
-      return { ...c, enrolledCount: dealsOfCourse.length, ...courseMoney(dealsOfCourse) };
+      return {
+        ...c,
+        enrolledCount: dealsOfCourse.length,
+        ...courseMoney(dealsOfCourse),
+      };
     })
     .filter((c) => courseVisibleSince(req, c, c.enrolledCount));
   res.json({
@@ -130,7 +141,7 @@ export const list = asyncHandler(async (req, res) => {
 export const gantt = asyncHandler(async (req, res) => {
   const enrollment = await computeEnrollment(req);
   const courses = [...enrollment.courses].sort(
-    (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0)
+    (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0),
   );
 
   const data = courses
@@ -163,28 +174,38 @@ export const gantt = asyncHandler(async (req, res) => {
  */
 export const get = asyncHandler(async (req, res) => {
   const course = await Course.findById(req.params.id).lean();
-  if (!course) throw ApiError.notFound('קורס לא נמצא');
+  if (!course) throw ApiError.notFound("קורס לא נמצא");
 
   const enrollment = await computeEnrollment(req);
   const roster = (enrollment.byCourse.get(String(course._id)) || []).sort(
-    (a, b) => new Date(b.dealDate || 0) - new Date(a.dealDate || 0)
+    (a, b) => new Date(b.dealDate || 0) - new Date(a.dealDate || 0),
   );
 
   // Privacy: a rep may see the financial/status detail ONLY for their OWN deals.
   // For a classmate handled by another rep, expose just the name + rep (no money,
   // status, dates, or student link). Managers/super-admins see everything.
-  const scoped = req.user?.role === 'rep' ? String(req.user._id) : null;
+  const scoped = req.user?.role === "rep" ? String(req.user._id) : null;
   const visibleRoster = scoped
     ? roster.map((r) =>
         String(r.rep) === scoped
           ? r
-          : { _id: r._id, studentName: r.studentName, repName: r.repName, masked: true }
+          : {
+              _id: r._id,
+              studentName: r.studentName,
+              repName: r.repName,
+              masked: true,
+            },
       )
     : roster;
 
   res.json({
     success: true,
-    data: { course, roster: visibleRoster, money: courseMoney(roster), enrolledCount: roster.length },
+    data: {
+      course,
+      roster: visibleRoster,
+      money: courseMoney(roster),
+      enrolledCount: roster.length,
+    },
   });
 });
 
@@ -206,7 +227,7 @@ export const update = asyncHandler(async (req, res) => {
     new: true,
     runValidators: true,
   });
-  if (!course) throw ApiError.notFound('קורס לא נמצא');
+  if (!course) throw ApiError.notFound("קורס לא נמצא");
   res.json({ success: true, data: course });
 });
 
@@ -216,6 +237,6 @@ export const update = asyncHandler(async (req, res) => {
  */
 export const remove = asyncHandler(async (req, res) => {
   const course = await Course.findByIdAndDelete(req.params.id);
-  if (!course) throw ApiError.notFound('קורס לא נמצא');
+  if (!course) throw ApiError.notFound("קורס לא נמצא");
   res.json({ success: true, data: { _id: course._id } });
 });

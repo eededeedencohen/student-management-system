@@ -1,8 +1,8 @@
-import mongoose from 'mongoose';
-import asyncHandler from '../utils/asyncHandler.js';
-import ApiError from '../utils/ApiError.js';
-import Registration from '../models/Registration.js';
-import User from '../models/User.js';
+import mongoose from "mongoose";
+import asyncHandler from "../utils/asyncHandler.js";
+import ApiError from "../utils/ApiError.js";
+import Registration from "../models/Registration.js";
+import User from "../models/User.js";
 import {
   GRANULARITIES,
   addDays,
@@ -13,11 +13,11 @@ import {
   startOfHalf,
   startOfYear,
   nowFromReq,
-} from '../utils/dateRanges.js';
-import { applySince } from '../utils/dataScope.js';
+} from "../utils/dateRanges.js";
+import { applySince } from "../utils/dataScope.js";
 
 /**
- * commissionController — חישוב שכר ועמלות לכל נציג/ה.
+ * commissionController - חישוב שכר ועמלות לכל נציג/ה.
  *
  * כל החישובים סופרים אך ורק עסקאות אמיתיות: recordType === 'registration'
  * (לא פרסום / מעקב גבייה / אחר), בהתאם למוסכמת ההכנסות של המערכת.
@@ -27,15 +27,22 @@ const SALARY_RATIO_MIN = 7.5; // יחס שכר-להכנסה רצוי (מינימ
 const SALARY_RATIO_MAX = 15; // יחס שכר-להכנסה רצוי (מקסימום)
 
 const DAY = 86400000;
-// Base salary is MONTHLY; each granularity carries its FULL length in (30-day) months —
-// half year = ×6, week = 7/30 of the monthly base — regardless of how much of it has elapsed.
-const PERIOD_MONTHS = { day: 1 / 30, week: 7 / 30, month: 1, quarter: 3, half: 6, year: 12 };
+// Base salary is MONTHLY; each granularity carries its FULL length in (30-day) months -
+// half year = ×6, week = 7/30 of the monthly base - regardless of how much of it has elapsed.
+const PERIOD_MONTHS = {
+  day: 1 / 30,
+  week: 7 / 30,
+  month: 1,
+  quarter: 3,
+  half: 6,
+  year: 12,
+};
 
 /**
  * Resolve the commission period into { dateFilter, baseMonths }:
  *   - The window is PERIOD-TO-DATE: it starts at the CALENDAR start of the
  *     period and ends today. "שבוע" on a Sunday counts only that Sunday;
- *     "חודש" on the 12th counts only the 1st–12th — it never spills into the
+ *     "חודש" on the 12th counts only the 1st–12th - it never spills into the
  *     previous week/month/quarter.
  *   - baseMonths → the FULL period length relative to a month (PERIOD_MONTHS),
  *     not the elapsed part: half = base ×6, week = base ×7/30.
@@ -49,25 +56,39 @@ function resolvePeriod(query, now) {
     if (from) filter.$gte = from;
     if (to) filter.$lt = to;
     const days = from && to ? Math.max((to - from) / DAY, 0) : 30;
-    return { dateFilter: Object.keys(filter).length ? filter : null, baseMonths: days / 30 };
+    return {
+      dateFilter: Object.keys(filter).length ? filter : null,
+      baseMonths: days / 30,
+    };
   }
-  const g = GRANULARITIES.includes(query.period) ? query.period : 'month';
+  const g = GRANULARITIES.includes(query.period) ? query.period : "month";
   const end = addDays(startOfDay(now), 1); // exclusive upper bound = end of today
   let from;
   switch (g) {
-    case 'day': from = startOfDay(now); break;
-    case 'week': from = startOfWeek(now); break;
-    case 'quarter': from = startOfQuarter(now); break;
-    case 'half': from = startOfHalf(now); break;
-    case 'year': from = startOfYear(now); break;
-    case 'month':
-    default: from = startOfMonth(now);
+    case "day":
+      from = startOfDay(now);
+      break;
+    case "week":
+      from = startOfWeek(now);
+      break;
+    case "quarter":
+      from = startOfQuarter(now);
+      break;
+    case "half":
+      from = startOfHalf(now);
+      break;
+    case "year":
+      from = startOfYear(now);
+      break;
+    case "month":
+    default:
+      from = startOfMonth(now);
   }
   return { dateFilter: { $gte: from, $lt: end }, baseMonths: PERIOD_MONTHS[g] };
 }
 
 /**
- * computeCommission — מחשב את סכום העמלה לפי תצורת העמלה של הנציג/ה.
+ * computeCommission - מחשב את סכום העמלה לפי תצורת העמלה של הנציג/ה.
  * תומך במדרגות (tiers): בוחר את המדרגה הגבוהה ביותר שתנאי הסף שלה (fromSales)
  * קטן/שווה לסכום המכירות; אם אין מדרגות מתאימות נופלים לאחוז הבסיסי (commissionRate).
  *
@@ -78,13 +99,15 @@ function resolvePeriod(query, now) {
 export function computeCommission(salesAmount, commissionConfig = {}) {
   const sales = Number(salesAmount) || 0;
   const baseRate = Number(commissionConfig.commissionRate) || 0;
-  const tiers = Array.isArray(commissionConfig.tiers) ? commissionConfig.tiers : [];
+  const tiers = Array.isArray(commissionConfig.tiers)
+    ? commissionConfig.tiers
+    : [];
 
   let rate = baseRate;
   if (tiers.length) {
     // ממיינים לפי סף עולה ובוחרים את המדרגה הגבוהה ביותר שמתקיימת
     const sorted = [...tiers].sort(
-      (a, b) => (Number(a.fromSales) || 0) - (Number(b.fromSales) || 0)
+      (a, b) => (Number(a.fromSales) || 0) - (Number(b.fromSales) || 0),
     );
     let matched = null;
     for (const tier of sorted) {
@@ -112,13 +135,14 @@ function buildCommissionRow(user, agg, baseMonths = 1) {
 
   const { commissionRate, commissionAmount } = computeCommission(
     salesAmount,
-    commissionConfig
+    commissionConfig,
   );
   const totalSalary = base + commissionAmount;
   // יחס שכר-להכנסה: כמה הכנסה (מכירות) מול כל שקל שכר. גבוה = משתלם.
   const salaryToIncomeRatio = totalSalary > 0 ? salesAmount / totalSalary : 0;
   const ratioHealthy =
-    salaryToIncomeRatio >= SALARY_RATIO_MIN && salaryToIncomeRatio <= SALARY_RATIO_MAX;
+    salaryToIncomeRatio >= SALARY_RATIO_MIN &&
+    salaryToIncomeRatio <= SALARY_RATIO_MAX;
 
   return {
     repId: user._id,
@@ -146,7 +170,7 @@ function buildCommissionRow(user, agg, baseMonths = 1) {
  * @returns {Promise<Map<string, {salesAmount,collectedAmount,deals}>>} keyed by rep id
  */
 async function aggregateDeals(dateFilter, repIdFilter, req) {
-  const match = { recordType: 'registration', rep: { $ne: null } };
+  const match = { recordType: "registration", rep: { $ne: null } };
   if (dateFilter) match.dealDate = dateFilter;
   if (repIdFilter) match.rep = new mongoose.Types.ObjectId(repIdFilter);
   if (req) applySince(req, match); // מוד "מ-2026 בלבד"
@@ -155,9 +179,9 @@ async function aggregateDeals(dateFilter, repIdFilter, req) {
     { $match: match },
     {
       $group: {
-        _id: '$rep',
-        salesAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
-        collectedAmount: { $sum: { $ifNull: ['$totalPaid', 0] } },
+        _id: "$rep",
+        salesAmount: { $sum: { $ifNull: ["$totalAmount", 0] } },
+        collectedAmount: { $sum: { $ifNull: ["$totalPaid", 0] } },
         deals: { $sum: 1 },
       },
     },
@@ -191,7 +215,7 @@ export const list = asyncHandler(async (req, res) => {
   else if (req.query.repId) repIdFilter = req.query.repId;
 
   // שולפים את הנציגים הרלוונטיים (כולל מי שאין לו עסקאות בטווח -> שורה עם 0)
-  const userQuery = repIdFilter ? { _id: repIdFilter } : { role: 'rep' };
+  const userQuery = repIdFilter ? { _id: repIdFilter } : { role: "rep" };
   const users = await User.find(userQuery);
 
   const byRep = await aggregateDeals(dateFilter, repIdFilter, req);
@@ -200,9 +224,13 @@ export const list = asyncHandler(async (req, res) => {
     .map((user) =>
       buildCommissionRow(
         user,
-        byRep.get(String(user._id)) || { salesAmount: 0, collectedAmount: 0, deals: 0 },
-        baseMonths
-      )
+        byRep.get(String(user._id)) || {
+          salesAmount: 0,
+          collectedAmount: 0,
+          deals: 0,
+        },
+        baseMonths,
+      ),
     )
     .sort((a, b) => b.salesAmount - a.salesAmount);
 
@@ -219,15 +247,15 @@ export const detail = asyncHandler(async (req, res) => {
 
   // נציג מורשה לראות אך ורק את עצמו
   if (req.scopeRepId && String(req.scopeRepId) !== String(repId)) {
-    throw ApiError.forbidden('אין הרשאה לצפות בנתוני נציג/ה אחר/ת');
+    throw ApiError.forbidden("אין הרשאה לצפות בנתוני נציג/ה אחר/ת");
   }
 
   if (!mongoose.Types.ObjectId.isValid(repId)) {
-    throw ApiError.badRequest('מזהה נציג/ה לא תקין');
+    throw ApiError.badRequest("מזהה נציג/ה לא תקין");
   }
 
   const user = await User.findById(repId);
-  if (!user) throw ApiError.notFound('נציג/ה לא נמצא/ה');
+  if (!user) throw ApiError.notFound("נציג/ה לא נמצא/ה");
 
   const { dateFilter, baseMonths } = resolvePeriod(req.query, nowFromReq(req));
   const byRep = await aggregateDeals(dateFilter, repId, req);
