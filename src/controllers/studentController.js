@@ -88,17 +88,26 @@ export const list = asyncHandler(async (req, res) => {
         totalOutstanding: { $sum: '$deals.outstanding' },
         totalDeals: { $sum: '$deals.totalAmount' },
         dealsCount: { $size: '$deals' },
+        // תמצית סטטוסים + דגל בדיקה — לצ'יפים ולפילטרים בעמוד הסטודנטים
+        paidCount: { $size: { $filter: { input: '$deals', as: 'd', cond: { $eq: ['$$d.paymentStatus', 'paid'] } } } },
+        partialCount: { $size: { $filter: { input: '$deals', as: 'd', cond: { $eq: ['$$d.paymentStatus', 'partial'] } } } },
+        unpaidCount: { $size: { $filter: { input: '$deals', as: 'd', cond: { $eq: ['$$d.paymentStatus', 'unpaid'] } } } },
+        needsReview: { $gt: [{ $size: { $filter: { input: '$deals', as: 'd', cond: { $eq: ['$$d.needsReview', true] } } } }, 0] },
       },
     },
+    // ?state — תצוגות מהירות: יתרה פתוחה / לבדיקה / שולם הכל
+    ...(req.query.state === 'open' ? [{ $match: { totalOutstanding: { $gt: 0.5 } } }] : []),
+    ...(req.query.state === 'review' ? [{ $match: { needsReview: true } }] : []),
+    ...(req.query.state === 'settled' ? [{ $match: { dealsCount: { $gt: 0 }, totalOutstanding: { $lte: 0.5 } } }] : []),
     { $project: { regs: 0, deals: 0 } },
     { $sort: sortSpec },
     { $skip: skip },
     { $limit: limit },
   ];
 
-  // הספירה חייבת לשקף את אותו הסינון (ולא רק את חיפוש הטקסט)
+  // הספירה חייבת לשקף את אותו הסינון (state/מ-2026), בלי מיון/עימוד
   const countPipeline = pipeline.filter(
-    (st) => !('$sort' in st) && !('$skip' in st) && !('$limit' in st) && !('$addFields' in st && st.$addFields.totalPaid) && !('$project' in st)
+    (st) => !('$sort' in st) && !('$skip' in st) && !('$limit' in st) && !('$project' in st)
   );
   const [data, countRows] = await Promise.all([
     Student.aggregate(pipeline).collation({ locale: 'he' }),
