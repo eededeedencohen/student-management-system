@@ -2,6 +2,7 @@ import Expense from '../models/Expense.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import { parseDateQuery } from '../utils/dateRanges.js';
+import { sinceOf } from '../utils/dataScope.js';
 import { parseNumber, cleanStr } from '../utils/normalize.js';
 
 /**
@@ -80,6 +81,17 @@ export const list = asyncHandler(async (req, res) => {
   // סינון לפי טווח תאריכים על שדה date
   const dateFilter = parseDateQuery(req.query);
   if (dateFilter) filter.date = dateFilter;
+
+  // מוד "מ-2026 בלבד": הוצאות חד-פעמיות ישנות מוסתרות; הוצאות חוזרות (בלי תאריך
+  // בודד) הן התחייבות שוטפת ולכן נשארות מוצגות.
+  const since = sinceOf(req);
+  if (since) {
+    filter.$or = [
+      { date: { $gte: since } },
+      { date: null },
+      { recurrence: { $in: ['monthly', 'quarterly', 'yearly'] } },
+    ];
+  }
 
   // newest first; nulls (recurring expenses without a single date) sink to the end
   const data = await Expense.find(filter).sort({ date: -1, createdAt: -1 });
