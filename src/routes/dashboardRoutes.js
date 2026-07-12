@@ -11,5 +11,7 @@ router.use(scopeToRep);
 router.get('/summary', ctrl.summary);
 router.get('/timeseries', ctrl.timeseries);
 router.get('/reps', ctrl.reps);
+router.get('/upcoming', ctrl.upcoming); // הכנסות מתוזמנות לחודשים הקרובים
+router.get('/by-course', ctrl.byCourse); // מה נמכר בתקופה, לפי קורס
 
 export default router;

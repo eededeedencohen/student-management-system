@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import Registration from '../models/Registration.js';
-import Lead from '../models/Lead.js';
 import User from '../models/User.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
@@ -47,33 +46,6 @@ function buildRegMatch(dateFilter, repId) {
   return match;
 }
 
-/**
- * Count leads in range/scope. Aggregate docs contribute their `count`,
- * individual leads contribute 1 each. Dates use receivedDate, falling back to
- * periodStart for aggregate rows that only carry a period.
- * Returns a number (0 if none).
- */
-async function countLeads(dateFilter, repId) {
-  const match = {};
-  if (repId) match.rep = repId;
-  if (dateFilter) {
-    // ליד בודד לפי receivedDate; ליד מצרפי לפי periodStart
-    match.$or = [{ receivedDate: dateFilter }, { isAggregate: true, periodStart: dateFilter }];
-  }
-  const rows = await Lead.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: null,
-        total: {
-          $sum: { $cond: [{ $eq: ['$isAggregate', true] }, { $ifNull: ['$count', 0] }, 1] },
-        },
-      },
-    },
-  ]);
-  return rows[0]?.total || 0;
-}
-
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /**
@@ -85,47 +57,131 @@ export const summary = asyncHandler(async (req, res) => {
   const repId = resolveRepId(req);
   const regMatch = buildRegMatch(dateFilter, repId);
 
-  const [agg] = await Registration.aggregate([
-    { $match: regMatch },
-    {
-      $group: {
-        _id: null,
-        deals: { $sum: 1 },
-        salesAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
-        collected: { $sum: { $ifNull: ['$totalPaid', 0] } },
-        outstanding: { $sum: { $ifNull: ['$outstanding', 0] } },
-        // distinct students: ערכים יכולים להיות null אם אין קישור לתלמיד
-        studentSet: { $addToSet: '$student' },
+  /** aggregate one window into the headline numbers (+ status distribution). */
+  const aggregateWindow = async (match) => {
+    const rows = await Registration.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: '$paymentStatus',
+          deals: { $sum: 1 },
+          salesAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
+          collected: { $sum: { $ifNull: ['$totalPaid', 0] } },
+          outstanding: { $sum: { $ifNull: ['$outstanding', 0] } },
+          studentSet: { $addToSet: '$student' },
+        },
       },
-    },
-  ]);
+    ]);
+    const out = { deals: 0, salesAmount: 0, collected: 0, outstanding: 0, statusDist: { paid: 0, partial: 0, unpaid: 0 }, students: new Set() };
+    for (const r of rows) {
+      out.deals += r.deals;
+      out.salesAmount += r.salesAmount;
+      out.collected += r.collected;
+      out.outstanding += r.outstanding;
+      if (out.statusDist[r._id] !== undefined) out.statusDist[r._id] = r.deals;
+      for (const s of r.studentSet) if (s != null) out.students.add(String(s));
+    }
+    return out;
+  };
 
-  const deals = agg?.deals || 0;
-  const salesAmount = round2(agg?.salesAmount || 0);
-  const collected = round2(agg?.collected || 0);
-  const outstanding = round2(agg?.outstanding || 0);
+  const cur = await aggregateWindow(regMatch);
 
-  // נרשמים ייחודיים: סופרים מזהי תלמיד שאינם null/חסרים
-  const registrants = (agg?.studentSet || []).filter((s) => s != null).length;
-
-  const avgBasket = deals > 0 ? round2(salesAmount / deals) : 0;
-
-  const leadsCount = await countLeads(dateFilter, repId);
-  // אם אין לידים בכלל — אחוז סגירה לא מוגדר
-  const closeRate = leadsCount > 0 ? round2(deals / leadsCount) : null;
+  // תקופה קודמת (חלון זהה באורכו, צמוד אחורה) — לחישוב דלתא בכרטיסי ה-KPI
+  let prev = null;
+  if (dateFilter?.$gte && dateFilter?.$lt) {
+    const from = new Date(dateFilter.$gte);
+    const to = new Date(dateFilter.$lt);
+    const prevFilter = { $gte: new Date(from - (to - from)), $lt: from };
+    const p = await aggregateWindow(buildRegMatch(prevFilter, repId));
+    prev = { deals: p.deals, salesAmount: round2(p.salesAmount), collected: round2(p.collected) };
+  }
 
   res.json({
     success: true,
     data: {
-      registrants,
-      deals,
-      salesAmount,
-      collected,
-      outstanding,
-      avgBasket,
-      closeRate,
+      registrants: cur.students.size,
+      deals: cur.deals,
+      salesAmount: round2(cur.salesAmount),
+      collected: round2(cur.collected),
+      outstanding: round2(cur.outstanding),
+      avgBasket: cur.deals > 0 ? round2(cur.salesAmount / cur.deals) : 0,
+      statusDist: cur.statusDist,
+      prev,
     },
   });
+});
+
+/**
+ * GET /api/dashboard/upcoming
+ * הכנסות מתוזמנות קדימה: תשלומים עתידיים (paid=false) עם תאריך יעד, מקובצים לפי חודש,
+ * לחצי השנה הקרובה. עסקאות בלבד (לא מבוטלות), בסקופ נציג/ה.
+ */
+export const upcoming = asyncHandler(async (req, res) => {
+  const repId = resolveRepId(req);
+  const now = nowFromReq(req);
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 6, 1));
+
+  const match = { recordType: 'registration' };
+  if (repId) match.rep = repId;
+
+  const rows = await Registration.aggregate([
+    { $match: match },
+    { $unwind: '$payments' },
+    { $match: { 'payments.paid': false, 'payments.dueDate': { $gte: start, $lt: end } } },
+    {
+      $group: {
+        _id: { y: { $year: '$payments.dueDate' }, m: { $month: '$payments.dueDate' } },
+        amount: { $sum: '$payments.amount' },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+  const byKey = new Map(rows.map((r) => [`${r._id.y}-${r._id.m}`, r]));
+  const data = [];
+  for (let i = 0; i < 6; i += 1) {
+    const d = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1));
+    const k = `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}`;
+    const hit = byKey.get(k);
+    data.push({
+      key: k,
+      label: `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`,
+      amount: round2(hit?.amount || 0),
+      count: hit?.count || 0,
+    });
+  }
+  res.json({ success: true, data });
+});
+
+/**
+ * GET /api/dashboard/by-course
+ * העסקאות בתקופה מקובצות לפי קורס (מכירות + עסקאות), ממוין יורד — "מה נמכר".
+ */
+export const byCourse = asyncHandler(async (req, res) => {
+  const dateFilter = parseDateQuery(req.query, nowFromReq(req));
+  const repId = resolveRepId(req);
+  const match = buildRegMatch(dateFilter, repId);
+
+  const rows = await Registration.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: '$course',
+        deals: { $sum: 1 },
+        salesAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
+        fallbackName: { $first: { $ifNull: ['$courseRaw', '$courseField'] } },
+      },
+    },
+    { $sort: { salesAmount: -1 } },
+    { $limit: 8 },
+    { $lookup: { from: 'courses', localField: '_id', foreignField: '_id', as: 'course' } },
+  ]);
+  const data = rows.map((r) => ({
+    name: r.course?.[0]?.name || r.fallbackName || 'ללא קורס',
+    deals: r.deals,
+    salesAmount: round2(r.salesAmount),
+  }));
+  res.json({ success: true, data });
 });
 
 /**
@@ -234,24 +290,6 @@ export const reps = asyncHandler(async (req, res) => {
   ]);
   const salesByRep = new Map(salesRows.map((r) => [String(r._id), r]));
 
-  // --- לידים לפי נציג (לחישוב אחוז סגירה) ---
-  const leadMatch = { rep: { $in: repIds } };
-  if (dateFilter) {
-    leadMatch.$or = [{ receivedDate: dateFilter }, { isAggregate: true, periodStart: dateFilter }];
-  }
-  const leadRows = await Lead.aggregate([
-    { $match: leadMatch },
-    {
-      $group: {
-        _id: '$rep',
-        leads: {
-          $sum: { $cond: [{ $eq: ['$isAggregate', true] }, { $ifNull: ['$count', 0] }, 1] },
-        },
-      },
-    },
-  ]);
-  const leadsByRep = new Map(leadRows.map((r) => [String(r._id), r.leads]));
-
   const data = repUsers
     .map((u) => {
       const s = salesByRep.get(String(u._id)) || {};
@@ -260,8 +298,6 @@ export const reps = asyncHandler(async (req, res) => {
       const collected = round2(s.collected || 0);
       const outstanding = round2(s.outstanding || 0);
       const avgBasket = deals > 0 ? round2(salesAmount / deals) : 0;
-      const leads = leadsByRep.get(String(u._id)) || 0;
-      const closeRate = leads > 0 ? round2(deals / leads) : null;
       return {
         repId: String(u._id),
         repName: u.name,
@@ -270,8 +306,6 @@ export const reps = asyncHandler(async (req, res) => {
         collected,
         outstanding,
         avgBasket,
-        leads,
-        closeRate,
       };
     })
     .sort((a, b) => b.salesAmount - a.salesAmount);
