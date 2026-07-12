@@ -92,15 +92,26 @@ function attributeIncome(reg, buckets, index, firstMonthStart, includeVat, unsch
   // payment in the month it's actually due (overdue ones clamp to the first month),
   // instead of guessing from installment-count. This is the precise, correct path.
   if (reg.schemaVersion === 2) {
+    let scheduledSum = 0;
     for (const p of reg.payments || []) {
       if (p.paid) continue;
       const amt = Number(p.amount) || 0;
       if (amt <= 0) continue;
+      scheduledSum += amt;
       const amount = includeVat ? amt : exVatIncome(amt, reg);
       let monthStart = p.dueDate ? startOfMonth(p.dueDate) : firstMonthStart;
       if (monthStart < firstMonthStart) monthStart = firstMonthStart; // never forecast in the past
       const idx = index.get(MONTH_KEY(monthStart));
       if (idx !== undefined) buckets[idx].expectedIncome += amount; // due beyond the window → dropped
+    }
+    // יתרה שאין לה תשלומים עתידיים מתועדים (תוכנית שקיימת רק בהערה, או חוב בלי פריסה) —
+    // כסף אמיתי שמגיע לעסק אך מועדו לא ידוע ⇒ נכנס למאגר "ללא מועד ידוע", לא נעלם.
+    const remainder = (Number(reg.outstanding) || 0) - scheduledSum;
+    if (remainder > 0.5) {
+      const amount = includeVat ? remainder : exVatIncome(remainder, reg);
+      unscheduled.total += amount;
+      const key = reg.paymentCategory || 'unknown';
+      unscheduled.byCategory[key] = (unscheduled.byCategory[key] || 0) + amount;
     }
     return;
   }
