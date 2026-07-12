@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import Course from '../models/Course.js';
 import Registration from '../models/Registration.js';
 import { buildCourseIndex, matchDealToCourse } from '../utils/courseMatch.js';
+import { applySince } from '../utils/dataScope.js';
 
 /**
  * בקר קורסים — ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.
@@ -24,10 +25,12 @@ const ROSTER_FIELDS =
  * otherwise we fall back to the best-effort matcher.
  * Returns { courses, index, byCourse: Map<courseId, deals[]>, unassigned }.
  */
-async function computeEnrollment() {
+async function computeEnrollment(req) {
   const courses = await Course.find({}).lean();
   const index = buildCourseIndex(courses);
-  const deals = await Registration.find({ recordType: 'registration' })
+  const dealsFilter = { recordType: 'registration' };
+  if (req) applySince(req, dealsFilter); // מוד "מ-2026 בלבד"
+  const deals = await Registration.find(dealsFilter)
     .select(ROSTER_FIELDS + ' course coursesAll courseField cohortLabel')
     .lean();
 
@@ -67,7 +70,7 @@ export const list = asyncHandler(async (req, res) => {
 
   const [data, enrollment] = await Promise.all([
     Course.find(filter).sort({ startDate: 1 }).lean(),
-    computeEnrollment(),
+    computeEnrollment(req),
   ]);
   const withCounts = data.map((c) => ({
     ...c,
@@ -86,7 +89,7 @@ export const list = asyncHandler(async (req, res) => {
  * מחזיר קורסים בפורמט מתאים לגאנט, כולל ספירת נרשמים לכל קורס.
  */
 export const gantt = asyncHandler(async (req, res) => {
-  const enrollment = await computeEnrollment();
+  const enrollment = await computeEnrollment(req);
   const courses = [...enrollment.courses].sort(
     (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0)
   );
@@ -116,7 +119,7 @@ export const get = asyncHandler(async (req, res) => {
   const course = await Course.findById(req.params.id).lean();
   if (!course) throw ApiError.notFound('קורס לא נמצא');
 
-  const enrollment = await computeEnrollment();
+  const enrollment = await computeEnrollment(req);
   const roster = (enrollment.byCourse.get(String(course._id)) || []).sort(
     (a, b) => new Date(b.dealDate || 0) - new Date(a.dealDate || 0)
   );

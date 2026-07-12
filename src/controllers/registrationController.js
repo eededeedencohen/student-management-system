@@ -6,6 +6,7 @@ import Lead from '../models/Lead.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import { parseDateQuery } from '../utils/dateRanges.js';
+import { applySince } from '../utils/dataScope.js';
 import {
   parseNumber,
   parsePaymentMethod,
@@ -72,6 +73,7 @@ export const list = asyncHandler(async (req, res) => {
   // תאריך עסקה — date filter on dealDate when from/to/period supplied
   const dateFilter = parseDateQuery(req.query);
   if (dateFilter) filter.dealDate = dateFilter;
+  applySince(req, filter); // מוד "מ-2026 בלבד"
 
   const { page, limit, skip } = paging(req.query);
 
@@ -102,6 +104,7 @@ export const list = asyncHandler(async (req, res) => {
  */
 export const debtors = asyncHandler(async (req, res) => {
   const filter = { outstanding: { $gt: 0 } };
+  applySince(req, filter); // מוד "מ-2026 בלבד"
 
   if (req.scopeRepId) {
     filter.rep = req.scopeRepId;

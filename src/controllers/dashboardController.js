@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import { parseDateQuery, bucketOf, GRANULARITIES, nowFromReq } from '../utils/dateRanges.js';
+import { applySince } from '../utils/dataScope.js';
 
 /**
  * Dashboard controller — KPIs for the manager (וגם נציג בודד בסקופ).
@@ -39,10 +40,11 @@ function resolveRepId(req) {
 }
 
 /** Build the base registration $match (sales only) with date + rep scope. */
-function buildRegMatch(dateFilter, repId) {
+function buildRegMatch(dateFilter, repId, req) {
   const match = { recordType: 'registration' };
   if (dateFilter) match.dealDate = dateFilter;
   if (repId) match.rep = repId;
+  if (req) applySince(req, match); // מוד "מ-2026 בלבד"
   return match;
 }
 
@@ -55,7 +57,7 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 export const summary = asyncHandler(async (req, res) => {
   const dateFilter = parseDateQuery(req.query, nowFromReq(req));
   const repId = resolveRepId(req);
-  const regMatch = buildRegMatch(dateFilter, repId);
+  const regMatch = buildRegMatch(dateFilter, repId, req);
 
   /** aggregate one window into the headline numbers (+ status distribution). */
   const aggregateWindow = async (match) => {
@@ -101,7 +103,7 @@ export const summary = asyncHandler(async (req, res) => {
     prevFilter = { $gte: new Date(from - (to - from)), $lt: from };
   }
   if (prevFilter) {
-    const p = await aggregateWindow(buildRegMatch(prevFilter, repId));
+    const p = await aggregateWindow(buildRegMatch(prevFilter, repId, req));
     prev = { deals: p.deals, salesAmount: round2(p.salesAmount), collected: round2(p.collected) };
   }
 
@@ -133,6 +135,7 @@ export const upcoming = asyncHandler(async (req, res) => {
 
   const match = { recordType: 'registration' };
   if (repId) match.rep = repId;
+  applySince(req, match); // מוד "מ-2026 בלבד"
 
   const rows = await Registration.aggregate([
     { $match: match },
@@ -169,7 +172,7 @@ export const upcoming = asyncHandler(async (req, res) => {
 export const byCourse = asyncHandler(async (req, res) => {
   const dateFilter = parseDateQuery(req.query, nowFromReq(req));
   const repId = resolveRepId(req);
-  const match = buildRegMatch(dateFilter, repId);
+  const match = buildRegMatch(dateFilter, repId, req);
 
   const rows = await Registration.aggregate([
     { $match: match },
@@ -214,7 +217,7 @@ export const timeseries = asyncHandler(async (req, res) => {
     throw ApiError.badRequest(`metric לא חוקי. ערכים אפשריים: ${allowedMetrics.join(', ')}`);
   }
 
-  const match = buildRegMatch(dateFilter, repId);
+  const match = buildRegMatch(dateFilter, repId, req);
   // מושכים מסמכים רזים בלבד עם השדות הדרושים, ומקבצים ב-JS לפי bucketOf
   const docs = await Registration.find(match)
     .select('dealDate totalAmount totalPaid outstanding student')

@@ -1,6 +1,7 @@
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import { startOfMonth, addMonths, bucketOf, nowFromReq } from '../utils/dateRanges.js';
+import { applySince } from '../utils/dataScope.js';
 import Registration from '../models/Registration.js';
 import Expense from '../models/Expense.js';
 
@@ -200,10 +201,12 @@ export const forecast = asyncHandler(async (req, res) => {
   // Receivables only: real registrations + ongoing collection follow-ups.
   // (refunds were zeroed at import; advertising / "other" are not income.)
   const unscheduled = { total: 0, byCategory: {} };
-  const debtors = await Registration.find({
+  const debtorsFilter = {
     outstanding: { $gt: 0 },
     recordType: { $in: ['registration', 'collection_followup'] },
-  })
+  };
+  applySince(req, debtorsFilter); // מוד "מ-2026 בלבד"
+  const debtors = await Registration.find(debtorsFilter)
     .select(
       'outstanding totalAmount amountExVat installments paymentCategory nextPaymentDate schemaVersion payments'
     )

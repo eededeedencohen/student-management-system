@@ -4,6 +4,7 @@ import ApiError from '../utils/ApiError.js';
 import Registration from '../models/Registration.js';
 import User from '../models/User.js';
 import { addDays, addMonths, startOfDay, nowFromReq } from '../utils/dateRanges.js';
+import { applySince } from '../utils/dataScope.js';
 
 /**
  * commissionController — חישוב שכר ועמלות לכל נציג/ה.
@@ -131,10 +132,11 @@ function buildCommissionRow(user, agg, baseMonths = 1) {
  * @param {string|null} repIdFilter  restrict to a single rep id (or null = all)
  * @returns {Promise<Map<string, {salesAmount,collectedAmount,deals}>>} keyed by rep id
  */
-async function aggregateDeals(dateFilter, repIdFilter) {
+async function aggregateDeals(dateFilter, repIdFilter, req) {
   const match = { recordType: 'registration', rep: { $ne: null } };
   if (dateFilter) match.dealDate = dateFilter;
   if (repIdFilter) match.rep = new mongoose.Types.ObjectId(repIdFilter);
+  if (req) applySince(req, match); // מוד "מ-2026 בלבד"
 
   const rows = await Registration.aggregate([
     { $match: match },
@@ -179,7 +181,7 @@ export const list = asyncHandler(async (req, res) => {
   const userQuery = repIdFilter ? { _id: repIdFilter } : { role: 'rep' };
   const users = await User.find(userQuery);
 
-  const byRep = await aggregateDeals(dateFilter, repIdFilter);
+  const byRep = await aggregateDeals(dateFilter, repIdFilter, req);
 
   const data = users
     .map((user) =>
@@ -215,7 +217,7 @@ export const detail = asyncHandler(async (req, res) => {
   if (!user) throw ApiError.notFound('נציג/ה לא נמצא/ה');
 
   const { dateFilter, baseMonths } = resolvePeriod(req.query, nowFromReq(req));
-  const byRep = await aggregateDeals(dateFilter, repId);
+  const byRep = await aggregateDeals(dateFilter, repId, req);
   const agg = byRep.get(String(repId)) || {
     salesAmount: 0,
     collectedAmount: 0,

@@ -3,6 +3,7 @@ import Registration from '../models/Registration.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import { splitName } from '../utils/normalize.js';
+import { sinceOf } from '../utils/dataScope.js';
 
 /** Clamp pagination params: page>=1, 1<=limit<=500 (default 50). */
 const parsePaging = (query) => {
@@ -72,7 +73,9 @@ export const list = asyncHandler(async (req, res) => {
           $filter: {
             input: '$regs',
             as: 'r',
-            cond: { $eq: ['$$r.recordType', 'registration'] },
+            cond: sinceOf(req)
+              ? { $and: [{ $eq: ['$$r.recordType', 'registration'] }, { $gte: ['$$r.dealDate', sinceOf(req)] }] }
+              : { $eq: ['$$r.recordType', 'registration'] },
           },
         },
       },
@@ -113,7 +116,9 @@ export const getOne = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.params.id);
   if (!student) throw ApiError.notFound('תלמיד/ה לא נמצא/ה');
 
-  const registrations = await Registration.find({ student: student._id }).sort({
+  const regFilter = { student: student._id };
+  if (sinceOf(req)) regFilter.dealDate = { $gte: sinceOf(req) }; // מוד "מ-2026 בלבד"
+  const registrations = await Registration.find(regFilter).sort({
     dealDate: -1,
   });
 
