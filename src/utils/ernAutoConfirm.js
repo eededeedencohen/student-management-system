@@ -1,20 +1,21 @@
 import Registration from '../models/Registration.js';
 
 /**
- * אישור אוטומטי לתשלומי ERN שהגיע מועדם.
+ * אישור אוטומטי לתשלומים מתוזמנים שהגיע מועדם.
  *
- * חוק עסקי (מהגדרת הנתונים המתוקנת): "ברגע ש-ERN בתמונה, כשמגיע היום בחודש הכסף נכנס" —
- * הנציגות לא סימנו מעקב באופן אמין, ולכן תשלום ERN שמועדו עבר נחשב כנגבה גם בלי ✓ ידני.
- * (פריסת אשראי אינה רלוונטית כאן — בחיוב אשראי כל הכסף נכנס מיידית ביום העסקה.)
+ * חוק עסקי: "אם נקבע שכל חודש יעביר X — זה מה שיהיה". סומכים על המילה של הסטודנטים:
+ * תשלום מתוזמן (ERN, חיוב אשראי עתידי או העברה שהובטחה לתאריך) שהמועד שלו עבר —
+ * נחשב שנגבה, גם בלי ✓ ידני. (במקור הוחל רק על ERN; הורחב לכל אמצעי לפי ההנחיה.)
  *
- * חריג: הוראה שהופסקה (ההערה מסומנת "הופסק") אינה נגבית — נשארת פתוחה לטיפול ידני.
+ * חריג: הוראה/תוכנית שהופסקה (ההערה מכילה "הופסק") — נשארת פתוחה לטיפול ידני.
+ * תיקון ידני תמיד אפשרי דרך "בטל" בעמוד הסטודנט.
  *
- * רץ בעליית השרת + פעם ביום (ראו server.js), וניתן להריץ ידנית:
+ * רץ בעליית השרת + פעם ביום (server.js), והרצה ידנית:
  *   node src/scripts/ernAutoConfirm.js
  */
 export async function autoConfirmDueErn(now = new Date()) {
   const regs = await Registration.find({
-    payments: { $elemMatch: { method: 'ern', paid: false, dueDate: { $lte: now } } },
+    payments: { $elemMatch: { paid: false, dueDate: { $lte: now } } },
   });
 
   let flipped = 0;
@@ -22,12 +23,12 @@ export async function autoConfirmDueErn(now = new Date()) {
   for (const reg of regs) {
     let changed = false;
     for (const p of reg.payments) {
-      if (p.method !== 'ern' || p.paid) continue;
+      if (p.paid) continue;
       if (!p.dueDate || new Date(p.dueDate) > now) continue;
-      if (/הופסק/.test(p.note || '')) continue; // הוראה שבוטלה — לא נכנס כסף
+      if (/הופסק/.test(p.note || '')) continue; // תוכנית שבוטלה — לא נכנס כסף
       p.paid = true;
-      p.confirmedByName = 'אוטומטי — ERN נכנס במועד';
-      p.confirmedAt = new Date(p.dueDate); // הכסף נכנס ביום החיוב עצמו
+      p.confirmedByName = 'אוטומטי — נגבה במועד שסוכם';
+      p.confirmedAt = new Date(p.dueDate); // הכסף נכנס ביום שנקבע
       changed = true;
       flipped += 1;
     }
