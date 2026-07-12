@@ -225,6 +225,9 @@ export const create = asyncHandler(async (req, res) => {
         methodCategory: method,
         dueDate: p.dueDate ? new Date(p.dueDate) : undefined,
         paid,
+        // פריסת אשראי מגיעה מהטופס כרשומה אחת משולמת עם מספר התשלומים כמטא-נתון
+        installments: p.installments ? parseNumber(p.installments) : undefined,
+        note: cleanStr(p.label) || undefined,
         confirmedBy: paid ? uid : undefined,
         confirmedByName: paid ? uname : undefined,
         confirmedAt: paid ? new Date() : undefined,
