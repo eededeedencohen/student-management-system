@@ -138,6 +138,29 @@ function attributeIncome(reg, buckets, index, firstMonthStart, includeVat, unsch
   }
 }
 
+
+/** עסקאות מבוטלות שנגבה עליהן כסף והוא לא הוסדר (לא הועבר/לא ויתרו עליו) — החזר ממתין. */
+async function findRefundsDue(req) {
+  const filter = { recordType: 'cancelled', totalPaid: { $gt: 0 } };
+  applySince(req, filter);
+  const rows = await Registration.find(filter)
+    .select('externalId student studentName courseRaw courseField repName dealDate totalPaid noteEntries notes')
+    .lean();
+  const SETTLED = /עבר[ה]? ל|הועבר|לא ביקש|ויתר|קוזז|הוחזר/;
+  return rows
+    .filter((r) => !SETTLED.test([r.notes, ...(r.noteEntries || []).map((n) => n.text)].join(' ')))
+    .map((r) => ({
+      student: r.student,
+      studentName: r.studentName,
+      externalId: r.externalId,
+      course: r.courseRaw || r.courseField || '',
+      repName: r.repName || '',
+      dealDate: r.dealDate,
+      amount: r.totalPaid,
+      note: (r.noteEntries || []).map((n) => n.text).find((t) => /ביטול|לבדיקה/.test(t || '')) || 'עסקה בוטלה',
+    }));
+}
+
 /** Strip VAT from an expense amount when requested and the amount includes it. */
 function expenseAmount(exp, includeVat) {
   const amt = Number(exp.amount) || 0;
@@ -269,7 +292,14 @@ export const forecast = asyncHandler(async (req, res) => {
     ),
   };
 
-  res.json({ success: true, data: { months, totals, unscheduledIncome } });
+  // החזרים ממתינים: כסף ששולם על עסקאות שבוטלו וצריך לחזור — יוצא ללא תאריך ידוע
+  const refundItems = await findRefundsDue(req);
+  const refundsDue = {
+    total: round2(refundItems.reduce((a, x) => a + x.amount, 0)),
+    count: refundItems.length,
+  };
+
+  res.json({ success: true, data: { months, totals, unscheduledIncome, refundsDue } });
 });
 
 /**
@@ -430,12 +460,15 @@ export const unscheduledDetail = asyncHandler(async (req, res) => {
     });
   }
   items.sort((a, b) => b.amount - a.amount);
+  const refunds = await findRefundsDue(req);
   res.json({
     success: true,
     data: {
       items,
       total: round2(items.reduce((a, x) => a + x.amount, 0)),
       byCategory: items.reduce((m, x) => { m[x.method] = round2((m[x.method] || 0) + x.amount); return m; }, {}),
+      refunds,
+      refundsTotal: round2(refunds.reduce((a, x) => a + x.amount, 0)),
     },
   });
 });
