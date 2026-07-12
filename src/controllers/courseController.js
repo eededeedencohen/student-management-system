@@ -3,7 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import Course from '../models/Course.js';
 import Registration from '../models/Registration.js';
 import { buildCourseIndex, matchDealToCourse } from '../utils/courseMatch.js';
-import { applySince } from '../utils/dataScope.js';
+import { applySince, sinceOf } from '../utils/dataScope.js';
 
 /**
  * בקר קורסים — ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.
@@ -14,6 +14,30 @@ import { applySince } from '../utils/dataScope.js';
  *   FK → מחזור מפורש → רמז חודש עברי ("מאי") → קרבת תאריך עסקה לתחילת מחזור → מחזור יחיד.
  * עסקאות שאין להן מחזור קיים (בעיקר מחזורי 2024/2025 ישנים) נשארות "לא משויכות".
  */
+
+
+/** סכומי כסף לקורס מתוך עסקאות הרישום שלו. */
+function courseMoney(dealsOfCourse) {
+  let salesAmount = 0;
+  let collected = 0;
+  let outstanding = 0;
+  for (const d of dealsOfCourse || []) {
+    salesAmount += d.totalAmount || 0;
+    collected += d.totalPaid || 0;
+    outstanding += d.outstanding || 0;
+  }
+  const r2 = (n) => Math.round(n * 100) / 100;
+  return { salesAmount: r2(salesAmount), collected: r2(collected), outstanding: r2(outstanding) };
+}
+
+/** במוד "מ-2026 בלבד": קורס ישן (שהסתיים לפני 2026 ואין לו נרשמי 2026) מוסתר. */
+function courseVisibleSince(req, course, enrolledCount) {
+  const since = sinceOf(req);
+  if (!since) return true;
+  const edge = course.endDate || course.startDate;
+  if (edge && new Date(edge) >= since) return true;
+  return enrolledCount > 0;
+}
 
 /** Fields we need from a deal to show it in a course roster. */
 const ROSTER_FIELDS =
@@ -72,10 +96,12 @@ export const list = asyncHandler(async (req, res) => {
     Course.find(filter).sort({ startDate: 1 }).lean(),
     computeEnrollment(req),
   ]);
-  const withCounts = data.map((c) => ({
-    ...c,
-    enrolledCount: enrollment.byCourse.get(String(c._id))?.length || 0,
-  }));
+  const withCounts = data
+    .map((c) => {
+      const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
+      return { ...c, enrolledCount: dealsOfCourse.length, ...courseMoney(dealsOfCourse) };
+    })
+    .filter((c) => courseVisibleSince(req, c, c.enrolledCount));
   res.json({
     success: true,
     data: withCounts,
@@ -94,19 +120,26 @@ export const gantt = asyncHandler(async (req, res) => {
     (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0)
   );
 
-  const data = courses.map((c) => ({
-    _id: c._id,
-    name: c.name,
-    field: c.field,
-    startDate: c.startDate,
-    endDate: c.endDate,
-    sessionsCount: c.sessionsCount,
-    location: c.location,
-    lecturer: c.lecturer,
-    weekday: c.weekday,
-    status: c.status,
-    registrationsCount: enrollment.byCourse.get(String(c._id))?.length || 0,
-  }));
+  const data = courses
+    .map((c) => {
+      const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
+      return {
+        _id: c._id,
+        name: c.name,
+        field: c.field,
+        cohortLabel: c.cohortLabel,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        sessionsCount: c.sessionsCount,
+        location: c.location,
+        lecturer: c.lecturer,
+        weekday: c.weekday,
+        status: c.status,
+        registrationsCount: dealsOfCourse.length,
+        ...courseMoney(dealsOfCourse),
+      };
+    })
+    .filter((c) => courseVisibleSince(req, c, c.registrationsCount));
 
   res.json({ success: true, data, total: data.length });
 });
@@ -136,7 +169,10 @@ export const get = asyncHandler(async (req, res) => {
       )
     : roster;
 
-  res.json({ success: true, data: { course, roster: visibleRoster } });
+  res.json({
+    success: true,
+    data: { course, roster: visibleRoster, money: courseMoney(roster), enrolledCount: roster.length },
+  });
 });
 
 /**
