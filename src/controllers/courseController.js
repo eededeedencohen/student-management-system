@@ -20,25 +20,36 @@ const ROSTER_FIELDS =
 
 /**
  * Compute the deal→course assignment once over ALL current-enrolment deals.
+ * A deal with an explicit coursesAll (עסקה משולבת) enrolls in EVERY listed course;
+ * otherwise we fall back to the best-effort matcher.
  * Returns { courses, index, byCourse: Map<courseId, deals[]>, unassigned }.
  */
 async function computeEnrollment() {
   const courses = await Course.find({}).lean();
   const index = buildCourseIndex(courses);
   const deals = await Registration.find({ recordType: 'registration' })
-    .select(ROSTER_FIELDS + ' course courseField cohortLabel')
+    .select(ROSTER_FIELDS + ' course coursesAll courseField cohortLabel')
     .lean();
 
   const byCourse = new Map();
+  const push = (courseId, deal, how) => {
+    if (!byCourse.has(courseId)) byCourse.set(courseId, []);
+    byCourse.get(courseId).push({ ...deal, _matchHow: how });
+  };
   let unassigned = 0;
   for (const d of deals) {
+    // explicit multi-course link (combined deal) — enroll in each listed course
+    const all = (d.coursesAll || []).map(String).filter((id) => index.byId.has(id));
+    if (all.length) {
+      for (const id of all) push(id, d, 'fk-multi');
+      continue;
+    }
     const m = matchDealToCourse(d, index);
     if (!m) {
       unassigned += 1;
       continue;
     }
-    if (!byCourse.has(m.courseId)) byCourse.set(m.courseId, []);
-    byCourse.get(m.courseId).push({ ...d, _matchHow: m.how });
+    push(m.courseId, d, m.how);
   }
   return { courses, index, byCourse, unassigned };
 }

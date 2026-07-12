@@ -77,6 +77,8 @@ const registrationSchema = new Schema(
     studentName: { type: String, trim: true, index: true }, // שם הנרשם/ת (raw, always kept)
     idNumber: { type: String, trim: true },
     lead: { type: Schema.Types.ObjectId, ref: 'Lead', index: true }, // הליד שממנו נסגרה העסקה
+    // עסקה משולבת (שני קורסים בעסקה אחת): כל הקורסים; `course` נשאר הראשי.
+    coursesAll: [{ type: Schema.Types.ObjectId, ref: 'Course' }],
     rep: { type: Schema.Types.ObjectId, ref: 'User', index: true }, // נציגת המכירות
     repName: { type: String, trim: true },
     registeredByRaw: { type: String, trim: true }, // "נרשמה ע"י" כפי שהופיע
@@ -96,6 +98,14 @@ const registrationSchema = new Schema(
     schemaVersion: { type: Number, default: 1, index: true },
     discountPercent: { type: Number, default: 0 }, // אחוז הנחה של העסקה
     noteEntries: { type: [noteEntrySchema], default: [] }, // הערות עם תאריכים (v2)
+    // v2: explicit deal price (after discount). When set, it IS the deal total even if the
+    // recorded payments don't cover it (missing money / a future plan noted only in text).
+    // When absent, the total is derived from the payments (form-created deals).
+    dealPrice: { type: Number },
+    // סכום שנמחל/נסגר כהנחה בדיעבד (או יתרת עסקה שבוטלה) — מקטין את היתרה לגבייה
+    // בלי לשנות את מחיר העסקה. עסקה "שולם" במקור עם פער מחיר → הפער נרשם כאן.
+    writeOff: { type: Number, default: 0 },
+    externalId: { type: String, index: true }, // e.g. "D1324-1" from the unified JSON dataset
 
     // --- money ---
     totalAmount: { type: Number, default: 0 }, // סה"כ עסקה (v2: derived-and-cached = sum of payments)
@@ -133,7 +143,8 @@ const registrationSchema = new Schema(
     // --- classification (data is messy: some rows are ads / follow-ups) ---
     recordType: {
       type: String,
-      enum: ['registration', 'collection_followup', 'advertising', 'refund', 'other'],
+      // 'cancelled' = עסקה שלא בוצעה/בוטלה (נשמרת לתיעוד; לא נספרת כהכנסה)
+      enum: ['registration', 'collection_followup', 'advertising', 'refund', 'cancelled', 'other'],
       default: 'registration',
       index: true,
     },
@@ -157,11 +168,16 @@ registrationSchema.methods.recompute = function recompute() {
   // --- v2: total & status are DERIVED from the unified payments list ---
   if (this.schemaVersion === 2) {
     const pays = this.payments || [];
-    const total = pays.reduce((s, p) => s + (p.amount || 0), 0);
+    const paymentsSum = pays.reduce((s, p) => s + (p.amount || 0), 0);
     const collected = pays.reduce((s, p) => s + (p.paid ? p.amount || 0 : 0), 0);
+    // explicit dealPrice (JSON import) wins — the recorded payments may not cover the
+    // whole deal (missing money / future plan only noted in text); else derive from payments.
+    const total = this.dealPrice > 0 ? this.dealPrice : paymentsSum;
     this.totalAmount = total; // derived-and-cached so existing queries/aggregations keep working
     this.totalPaid = collected;
-    this.outstanding = Math.max(total - collected, 0);
+    // writeOff = residual forgiven as a discount (or a cancelled deal's balance) — it
+    // closes the gap between price and money without pretending money arrived.
+    this.outstanding = Math.max(total - collected - (this.writeOff || 0), 0);
     if (total > 0 && this.outstanding <= 0.5) this.paymentStatus = 'paid';
     else if (collected > 0) this.paymentStatus = 'partial';
     else this.paymentStatus = 'unpaid';
