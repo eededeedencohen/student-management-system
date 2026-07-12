@@ -86,12 +86,21 @@ export const summary = asyncHandler(async (req, res) => {
 
   const cur = await aggregateWindow(regMatch);
 
-  // תקופה קודמת (חלון זהה באורכו, צמוד אחורה) — לחישוב דלתא בכרטיסי ה-KPI
+  // תקופה קודמת — לחישוב דלתא בכרטיסי ה-KPI. הלקוח שולח ?prevFrom/?prevTo מפורשים
+  // ("אותה נקודה בתקופה הקודמת" — הוגן לחלון של מתחילת-התקופה-עד-היום); בהיעדרם,
+  // ברירת מחדל: חלון זהה באורכו צמוד אחורה.
   let prev = null;
-  if (dateFilter?.$gte && dateFilter?.$lt) {
+  let prevFilter = null;
+  if (req.query.prevFrom && req.query.prevTo) {
+    const pf = new Date(req.query.prevFrom);
+    const pt = new Date(req.query.prevTo);
+    if (!Number.isNaN(pf.getTime()) && !Number.isNaN(pt.getTime())) prevFilter = { $gte: pf, $lt: pt };
+  } else if (dateFilter?.$gte && dateFilter?.$lt) {
     const from = new Date(dateFilter.$gte);
     const to = new Date(dateFilter.$lt);
-    const prevFilter = { $gte: new Date(from - (to - from)), $lt: from };
+    prevFilter = { $gte: new Date(from - (to - from)), $lt: from };
+  }
+  if (prevFilter) {
     const p = await aggregateWindow(buildRegMatch(prevFilter, repId));
     prev = { deals: p.deals, salesAmount: round2(p.salesAmount), collected: round2(p.collected) };
   }
