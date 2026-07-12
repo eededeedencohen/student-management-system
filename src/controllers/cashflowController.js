@@ -260,3 +260,111 @@ export const forecast = asyncHandler(async (req, res) => {
 
   res.json({ success: true, data: { months, totals, unscheduledIncome } });
 });
+
+/**
+ * GET /api/cashflow/month-detail?month=YYYY-MM&windowFrom=YYYY-MM-DD&vat=true|false
+ * הפירוט מאחורי עמודת-חודש בתחזית: אילו תשלומים (של אילו תלמידים/עסקאות) מרכיבים את
+ * ההכנסה הצפויה, ואילו הוצאות את ההוצאה הצפויה. משתמש באותם כללים בדיוק כמו התחזית:
+ * תשלום עתידי משובץ לחודש של תאריך היעד שלו; תשלום שמועדו עבר נצמד לחודש הראשון בחלון.
+ */
+export const monthDetail = asyncHandler(async (req, res) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(req.query.month || ''));
+  if (!m) throw ApiError.badRequest('חודש לא תקין (פורמט YYYY-MM)');
+  const monthStart = new Date(Date.UTC(+m[1], +m[2] - 1, 1));
+  const monthEnd = addMonths(monthStart, 1);
+  const includeVat = req.query.vat !== 'false';
+  const windowFrom = req.query.windowFrom ? startOfMonth(new Date(req.query.windowFrom)) : null;
+  // האם זהו החודש הראשון בחלון המוצג? אם כן — תשלומים שמועדם עבר "נצמדים" אליו
+  const isFirstMonth = windowFrom && windowFrom.getTime() === monthStart.getTime();
+
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const debtorsFilter = {
+    outstanding: { $gt: 0 },
+    recordType: { $in: ['registration', 'collection_followup'] },
+  };
+  applySince(req, debtorsFilter);
+  const debtors = await Registration.find(debtorsFilter)
+    .select('externalId student studentName courseRaw courseField repName outstanding totalAmount amountExVat installments paymentCategory nextPaymentDate schemaVersion payments')
+    .lean();
+
+  const income = [];
+  for (const reg of debtors) {
+    if (reg.schemaVersion === 2) {
+      for (const p of reg.payments || []) {
+        if (p.paid) continue;
+        const amt = Number(p.amount) || 0;
+        if (amt <= 0) continue;
+        const due = p.dueDate ? new Date(p.dueDate) : null;
+        const bucket = due && (!windowFrom || due >= windowFrom) ? startOfMonth(due) : windowFrom || (due ? startOfMonth(due) : null);
+        if (!bucket || bucket.getTime() !== monthStart.getTime()) {
+          // תשלום שמועדו עבר נצמד לחודש הראשון בחלון בלבד
+          if (!(isFirstMonth && due && due < windowFrom)) continue;
+        }
+        income.push({
+          student: reg.student,
+          studentName: reg.studentName,
+          course: reg.courseRaw || reg.courseField || '',
+          repName: reg.repName || '',
+          method: p.method || p.methodCategory || '',
+          note: p.note || '',
+          dueDate: p.dueDate,
+          overdue: Boolean(due && windowFrom && due < windowFrom),
+          amount: round2(includeVat ? amt : exVatIncome(amt, reg)),
+        });
+      }
+    } else if (SCHEDULED_CATEGORIES.has(reg.paymentCategory || '')) {
+      // עסקת legacy (v1): פריסה משוערת — היתרה מחולקת שווה בין התשלומים
+      const spread = Number(reg.installments) > 1 ? Number(reg.installments) : 1;
+      const gross = Number(reg.outstanding) || 0;
+      const amount = includeVat ? gross : exVatIncome(gross, reg);
+      let cursor = incomeAnchor(reg, windowFrom || monthStart);
+      for (let i = 0; i < spread; i += 1) {
+        if (cursor.getTime() === monthStart.getTime()) {
+          income.push({
+            student: reg.student, studentName: reg.studentName,
+            course: reg.courseRaw || reg.courseField || '', repName: reg.repName || '',
+            method: reg.paymentCategory, note: `הערכה: תשלום ${i + 1}/${spread} מהיתרה`,
+            dueDate: null, overdue: false, amount: round2(amount / spread),
+          });
+        }
+        cursor = addMonths(cursor, 1);
+      }
+    }
+  }
+  income.sort((a, b) => b.amount - a.amount);
+
+  // --- הוצאות החודש ---
+  const expenses = await Expense.find({
+    $or: [
+      { recurrence: { $in: ['monthly', 'quarterly', 'yearly'] } },
+      { date: { $gte: monthStart, $lt: monthEnd } },
+    ],
+  }).lean();
+  const expenseItems = [];
+  for (const exp of expenses) {
+    let hits = false;
+    if (exp.recurrence && exp.recurrence !== 'none') hits = recurrenceHitsMonth(exp, monthStart);
+    else if (exp.date) hits = new Date(exp.date) >= monthStart && new Date(exp.date) < monthEnd;
+    if (!hits) continue;
+    expenseItems.push({
+      name: exp.name,
+      category: exp.category || '',
+      recurrence: exp.recurrence || 'none',
+      amount: round2(expenseAmount(exp, includeVat)),
+    });
+  }
+  expenseItems.sort((a, b) => b.amount - a.amount);
+
+  res.json({
+    success: true,
+    data: {
+      month: req.query.month,
+      income,
+      expenses: expenseItems,
+      totals: {
+        income: round2(income.reduce((a, x) => a + x.amount, 0)),
+        expense: round2(expenseItems.reduce((a, x) => a + x.amount, 0)),
+      },
+    },
+  });
+});

@@ -9,5 +9,6 @@ router.use(protect);
 router.use(requireManager);
 
 router.get('/forecast', ctrl.forecast);
+router.get('/month-detail', ctrl.monthDetail); // פירוט עמודת-חודש (מודל בלחיצה)
 
 export default router;
