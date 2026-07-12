@@ -218,11 +218,25 @@ export const forecast = asyncHandler(async (req, res) => {
   // --- resolve the forecast window ---
   const now = nowFromReq(req); // honours the "view as of" date override
   const from = req.query.from ? new Date(req.query.from) : startOfMonth(now);
-  const to = req.query.to ? new Date(req.query.to) : addMonths(startOfMonth(now), 6);
+  let to = req.query.to ? new Date(req.query.to) : addMonths(startOfMonth(now), 6);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     throw ApiError.badRequest('תאריך from/to לא תקין');
   }
   if (to < from) throw ApiError.badRequest('to חייב להיות אחרי from');
+
+  // מצב "הצג הכול": הטווח מתרחב אוטומטית עד חודש התשלום המתוזמן האחרון,
+  // כך שכל העמודות המתוארכות מוצגות ורק אחריהן עמודת "תאריך לא ידוע".
+  if (req.query.full === '1') {
+    const lastFilter = { outstanding: { $gt: 0 }, recordType: { $in: ['registration', 'collection_followup'] } };
+    applySince(req, lastFilter);
+    const [lastRow] = await Registration.aggregate([
+      { $match: lastFilter },
+      { $unwind: '$payments' },
+      { $match: { 'payments.paid': false, 'payments.dueDate': { $ne: null } } },
+      { $group: { _id: null, last: { $max: '$payments.dueDate' } } },
+    ]);
+    if (lastRow?.last && new Date(lastRow.last) > to) to = new Date(lastRow.last);
+  }
 
   // vat=true (default) keeps VAT; vat=false strips it.
   const includeVat = req.query.vat !== 'false';
