@@ -133,7 +133,7 @@ function buildDeal(s, dl) {
         methodCategory: method,
         dueDate: det.date ? new Date(det.date) : dl.dealDate ? new Date(dl.dealDate) : undefined,
         paid: true, // כסף שנרשם במקור = נגבה (פריסת אשראי: הכרטיס חויב)
-        installments: inst,
+        installments: isSpread && inst > 1 ? inst : undefined, // מטא-פריסה רק על פריסה אמיתית
         note: [isSpread && inst > 1 ? `פריסת אשראי ל-${inst} תשלומים` : '', p.note || '', ...prov]
           .filter(Boolean).join(' · '),
         source: srcLabel,
