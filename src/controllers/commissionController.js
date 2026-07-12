@@ -3,7 +3,17 @@ import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import Registration from '../models/Registration.js';
 import User from '../models/User.js';
-import { addDays, addMonths, startOfDay, nowFromReq } from '../utils/dateRanges.js';
+import {
+  GRANULARITIES,
+  addDays,
+  startOfDay,
+  startOfWeek,
+  startOfMonth,
+  startOfQuarter,
+  startOfHalf,
+  startOfYear,
+  nowFromReq,
+} from '../utils/dateRanges.js';
 import { applySince } from '../utils/dataScope.js';
 
 /**
@@ -17,15 +27,16 @@ const SALARY_RATIO_MIN = 7.5; // יחס שכר-להכנסה רצוי (מינימ
 const SALARY_RATIO_MAX = 15; // יחס שכר-להכנסה רצוי (מקסימום)
 
 const DAY = 86400000;
-// Base salary is MONTHLY, so each period is prorated to a fraction of a 30-day month.
-const PERIOD_MONTHS = { day: 1 / 30, week: 7 / 30, month: 1, quarter: 3, half: 6, year: 12 };
 
 /**
  * Resolve the commission period into { dateFilter, baseMonths }:
- *   - baseMonths → how many (30-day) months to prorate the monthly base salary by
- *     (day → 1/30 = ₪200 for a ₪6,000 base, month → ₪6,000, quarter → ₪18,000…).
- *   - The window is TRAILING and ends "now": "month" = one month back from today
- *     (e.g. the 15th → 15th prev month … today), NOT the calendar month-to-date.
+ *   - The window is PERIOD-TO-DATE: it starts at the CALENDAR start of the
+ *     period and ends today. "שבוע" on a Sunday counts only that Sunday;
+ *     "חודש" on the 12th counts only the 1st–12th — it never spills into the
+ *     previous week/month/quarter.
+ *   - baseMonths → the elapsed part of the period as a fraction of a 30-day
+ *     month (month on the 12th → 12/30), so the base salary and the
+ *     salary/income ratio stay proportional to the days actually counted.
  * Honours an explicit ?from/?to (prorates the base by its day span / 30).
  */
 function resolvePeriod(query, now) {
@@ -38,19 +49,20 @@ function resolvePeriod(query, now) {
     const days = from && to ? Math.max((to - from) / DAY, 0) : 30;
     return { dateFilter: Object.keys(filter).length ? filter : null, baseMonths: days / 30 };
   }
-  const g = PERIOD_MONTHS[query.period] ? query.period : 'month';
+  const g = GRANULARITIES.includes(query.period) ? query.period : 'month';
   const end = addDays(startOfDay(now), 1); // exclusive upper bound = end of today
   let from;
   switch (g) {
     case 'day': from = startOfDay(now); break;
-    case 'week': from = addDays(end, -7); break;
-    case 'quarter': from = addMonths(end, -3); break;
-    case 'half': from = addMonths(end, -6); break;
-    case 'year': from = addMonths(end, -12); break;
+    case 'week': from = startOfWeek(now); break;
+    case 'quarter': from = startOfQuarter(now); break;
+    case 'half': from = startOfHalf(now); break;
+    case 'year': from = startOfYear(now); break;
     case 'month':
-    default: from = addMonths(end, -1);
+    default: from = startOfMonth(now);
   }
-  return { dateFilter: { $gte: from, $lt: end }, baseMonths: PERIOD_MONTHS[g] };
+  const baseMonths = Math.max((end - from) / DAY, 1) / 30;
+  return { dateFilter: { $gte: from, $lt: end }, baseMonths };
 }
 
 /**
