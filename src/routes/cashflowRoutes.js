@@ -10,5 +10,6 @@ router.use(requireManager);
 
 router.get('/forecast', ctrl.forecast);
 router.get('/month-detail', ctrl.monthDetail); // פירוט עמודת-חודש (מודל בלחיצה)
+router.get('/unscheduled-detail', ctrl.unscheduledDetail); // פירוט 'ללא מועד ודאי'
 
 export default router;

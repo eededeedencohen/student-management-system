@@ -379,3 +379,63 @@ export const monthDetail = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/**
+ * GET /api/cashflow/unscheduled-detail?vat=true|false
+ * הפירוט מאחורי "לגבייה — ללא מועד ודאי": כל עסקה שיש לה יתרה שאינה מכוסה בתשלומים
+ * עתידיים מתועדים — כמה, באיזה אמצעי, ולמה אין מועד (תוכנית בהערה בלבד / אין פריסה).
+ * אותה לוגיקה בדיוק כמו התחזית (attributeIncome), כך שהסכום תואם 1:1 לקוביה.
+ */
+export const unscheduledDetail = asyncHandler(async (req, res) => {
+  const includeVat = req.query.vat !== 'false';
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  const debtorsFilter = {
+    outstanding: { $gt: 0 },
+    recordType: { $in: ['registration', 'collection_followup'] },
+  };
+  applySince(req, debtorsFilter);
+  const debtors = await Registration.find(debtorsFilter)
+    .select('externalId student studentName courseRaw courseField repName dealDate outstanding totalAmount totalPaid amountExVat installments paymentCategory nextPaymentNote schemaVersion payments noteEntries')
+    .lean();
+
+  const items = [];
+  for (const reg of debtors) {
+    let remainder = 0;
+    if (reg.schemaVersion === 2) {
+      const scheduled = (reg.payments || []).filter((p) => !p.paid).reduce((a, p) => a + (p.amount || 0), 0);
+      remainder = (Number(reg.outstanding) || 0) - scheduled;
+    } else if (!SCHEDULED_CATEGORIES.has(reg.paymentCategory || '')) {
+      remainder = Number(reg.outstanding) || 0; // legacy לא-מתוזמן
+    }
+    if (remainder <= 0.5) continue;
+
+    // הסיבה: תוכנית שמופיעה רק בהערה, או אין תיעוד בכלל
+    const planNote =
+      reg.nextPaymentNote ||
+      (reg.noteEntries || []).map((n) => n.text).find((t) => /בהמשך|תשלומים|לחודש|פריסה/.test(t || ''));
+    items.push({
+      student: reg.student,
+      studentName: reg.studentName,
+      externalId: reg.externalId,
+      course: reg.courseRaw || reg.courseField || '',
+      repName: reg.repName || '',
+      method: reg.paymentCategory || 'unknown',
+      dealDate: reg.dealDate,
+      totalAmount: reg.totalAmount,
+      totalPaid: reg.totalPaid,
+      amount: round2(includeVat ? remainder : exVatIncome(remainder, reg)),
+      planNote: planNote || null,
+      reason: planNote ? 'תוכנית קיימת בהערה בלבד — ללא תאריכים מתועדים' : 'אין פריסה או תוכנית מתועדת',
+    });
+  }
+  items.sort((a, b) => b.amount - a.amount);
+  res.json({
+    success: true,
+    data: {
+      items,
+      total: round2(items.reduce((a, x) => a + x.amount, 0)),
+      byCategory: items.reduce((m, x) => { m[x.method] = round2((m[x.method] || 0) + x.amount); return m; }, {}),
+    },
+  });
+});
