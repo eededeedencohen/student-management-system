@@ -10,6 +10,7 @@ import {
   nowFromReq,
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
+import { cashDateOf } from "../utils/cashTiming.js";
 
 /**
  * Dashboard controller - KPIs for the manager (וגם נציג בודד בסקופ).
@@ -142,7 +143,8 @@ export const summary = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/dashboard/upcoming
- * הכנסות מתוזמנות קדימה: תשלומים עתידיים (paid=false) עם תאריך יעד, מקובצים לפי חודש,
+ * הכנסות מתוזמנות קדימה: תשלומים עתידיים (paid=false), מקובצים לפי חודש
+ * קבלת הכסף (אשראי נסלק ב-7 בחודש העוקב לחיוב; שאר האמצעים במועד התשלום),
  * לחצי השנה הקרובה. עסקאות בלבד (לא מבוטלות), בסקופ נציג/ה.
  */
 export const upcoming = asyncHandler(async (req, res) => {
@@ -152,32 +154,44 @@ export const upcoming = asyncHandler(async (req, res) => {
   const end = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 6, 1),
   );
+  // חיוב אשראי מהחודש שלפני החלון נסלק בתוכו - מרחיבים את השאיפה חודש אחורה
+  const chargeFrom = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
+  );
 
   const match = { recordType: "registration" };
   if (repId) match.rep = repId;
   applySince(req, match); // מוד "מ-2026 בלבד"
 
-  const rows = await Registration.aggregate([
+  const payments = await Registration.aggregate([
     { $match: match },
     { $unwind: "$payments" },
     {
       $match: {
         "payments.paid": false,
-        "payments.dueDate": { $gte: start, $lt: end },
+        "payments.dueDate": { $gte: chargeFrom, $lt: end },
       },
     },
     {
-      $group: {
-        _id: {
-          y: { $year: "$payments.dueDate" },
-          m: { $month: "$payments.dueDate" },
-        },
-        amount: { $sum: "$payments.amount" },
-        count: { $sum: 1 },
+      $project: {
+        amount: "$payments.amount",
+        dueDate: "$payments.dueDate",
+        method: "$payments.method",
+        methodCategory: "$payments.methodCategory",
       },
     },
   ]);
-  const byKey = new Map(rows.map((r) => [`${r._id.y}-${r._id.m}`, r]));
+  // קיבוץ לפי חודש קבלת הכסף בפועל
+  const byKey = new Map();
+  for (const p of payments) {
+    const cash = cashDateOf(p);
+    if (!cash || cash < start || cash >= end) continue;
+    const k = `${cash.getUTCFullYear()}-${cash.getUTCMonth() + 1}`;
+    const cur = byKey.get(k) || { amount: 0, count: 0 };
+    cur.amount += Number(p.amount) || 0;
+    cur.count += 1;
+    byKey.set(k, cur);
+  }
   const data = [];
   for (let i = 0; i < 6; i += 1) {
     const d = new Date(
@@ -193,6 +207,86 @@ export const upcoming = asyncHandler(async (req, res) => {
     });
   }
   res.json({ success: true, data });
+});
+
+/**
+ * GET /api/dashboard/upcoming-detail?from&to
+ * פירוט התשלומים העתידיים (paid=false) שמועדם בטווח - מזין את מודל
+ * הפירוט של גרף "הכנסות מתוזמנות". רשומות בלבד, בסקופ נציג/ה, מוד 2026.
+ */
+export const upcomingDetail = asyncHandler(async (req, res) => {
+  const repId = resolveRepId(req);
+  const from = new Date(req.query.from);
+  const to = new Date(req.query.to);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw ApiError.badRequest("from/to נדרשים (YYYY-MM-DD)");
+  }
+  // חיוב אשראי מהחודש הקודם נסלק בטווח - מרחיבים את השאיפה חודש אחורה
+  const chargeFrom = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth() - 1, 1),
+  );
+
+  const match = { recordType: "registration" };
+  if (repId) match.rep = repId;
+  applySince(req, match); // מוד "מ-2026 בלבד"
+
+  const rows = await Registration.aggregate([
+    { $match: match },
+    { $unwind: "$payments" },
+    {
+      $match: {
+        "payments.paid": false,
+        "payments.dueDate": { $gte: chargeFrom, $lt: to },
+      },
+    },
+    {
+      $project: {
+        student: 1,
+        studentName: 1,
+        repName: 1,
+        course: 1,
+        courseRaw: 1,
+        amount: "$payments.amount",
+        dueDate: "$payments.dueDate",
+        method: "$payments.method",
+        methodCategory: "$payments.methodCategory",
+        note: "$payments.note",
+      },
+    },
+    { $sort: { dueDate: 1, studentName: 1 } },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "course",
+        foreignField: "_id",
+        as: "courseDoc",
+      },
+    },
+  ]);
+
+  // מסננים לפי חודש קבלת הכסף בפועל (אשראי → סליקה ב-7 בחודש העוקב)
+  const data = rows
+    .map((r) => ({ ...r, cashDate: cashDateOf(r) }))
+    .filter((r) => r.cashDate && r.cashDate >= from && r.cashDate < to)
+    .map((r) => ({
+      dealId: r._id,
+      student: r.student,
+      studentName: r.studentName,
+      repName: r.repName,
+      courseName: r.courseDoc?.[0]?.name || r.courseRaw || null,
+      amount: round2(r.amount || 0),
+      dueDate: r.dueDate,
+      cashDate: r.cashDate,
+      method: r.method || null,
+      note: r.note || null,
+    }));
+  data.sort((a, b) => new Date(a.cashDate) - new Date(b.cashDate));
+  res.json({
+    success: true,
+    data,
+    total: data.length,
+    sum: round2(data.reduce((a, x) => a + (x.amount || 0), 0)),
+  });
 });
 
 /**
@@ -226,6 +320,7 @@ export const byCourse = asyncHandler(async (req, res) => {
     },
   ]);
   const data = rows.map((r) => ({
+    courseId: r._id ? String(r._id) : null, // להצלבה עם ספירת הרשומים החיה בלקוח
     name: r.course?.[0]?.name || r.fallbackName || "ללא קורס",
     deals: r.deals,
     salesAmount: round2(r.salesAmount),
@@ -237,11 +332,16 @@ export const byCourse = asyncHandler(async (req, res) => {
  * GET /api/dashboard/timeseries
  * ?granularity (day|week|month|quarter|half|year, default month)
  * ?metric (deals|salesAmount|collected|outstanding|registrants, default salesAmount)
+ * ?byRep=1 - בנוסף לסך הכללי, פירוק כל דלי לפי נציג/ה (byRep: { repId: value })
+ *            + sidecar `reps`: כל הנציגות בסדר יציב (לפי _id = סדר יצירה), גם אלה
+ *            בלי נתונים בטווח - כדי שצבע של נציגה לא ישתנה כשהפילטר משתנה,
+ *            ושנציגות חדשות (3, 4…) יקבלו אוטומטית את המשבצת הבאה.
  * Groups registrations by bucketOf(dealDate, granularity) in JS.
  */
 export const timeseries = asyncHandler(async (req, res) => {
   const dateFilter = parseDateQuery(req.query, nowFromReq(req));
   const repId = resolveRepId(req);
+  const byRepMode = req.query.byRep === "1" || req.query.byRep === "true";
 
   const granularity = req.query.granularity || "month";
   if (!GRANULARITIES.includes(granularity)) {
@@ -264,13 +364,31 @@ export const timeseries = asyncHandler(async (req, res) => {
     );
   }
 
+  /** תרומת עסקה אחת למדד (registrants נצבר כ-set בנפרד). */
+  const contributionOf = (r) => {
+    switch (metric) {
+      case "deals":
+        return 1;
+      case "salesAmount":
+        return r.totalAmount || 0;
+      case "collected":
+        return r.totalPaid || 0;
+      case "outstanding":
+        return r.outstanding || 0;
+      default:
+        return 0;
+    }
+  };
+
   const match = buildRegMatch(dateFilter, repId, req);
   // מושכים מסמכים רזים בלבד עם השדות הדרושים, ומקבצים ב-JS לפי bucketOf
   const docs = await Registration.find(match)
-    .select("dealDate totalAmount totalPaid outstanding student")
+    .select("dealDate totalAmount totalPaid outstanding student rep")
     .lean();
 
-  const buckets = new Map(); // key -> { key, label, start, value, studentSet }
+  const UNASSIGNED = "unassigned";
+  let hasUnassigned = false;
+  const buckets = new Map(); // key -> { key, label, start, value, studentSet, perRep }
   for (const r of docs) {
     if (!r.dealDate) continue; // ללא תאריך עסקה אי אפשר לשבץ לדלי
     const b = bucketOf(r.dealDate, granularity);
@@ -282,39 +400,62 @@ export const timeseries = asyncHandler(async (req, res) => {
         start: b.start,
         value: 0,
         studentSet: new Set(),
+        perRep: new Map(), // repId -> { value, studentSet }
       };
       buckets.set(b.key, entry);
     }
-    switch (metric) {
-      case "deals":
-        entry.value += 1;
-        break;
-      case "salesAmount":
-        entry.value += r.totalAmount || 0;
-        break;
-      case "collected":
-        entry.value += r.totalPaid || 0;
-        break;
-      case "outstanding":
-        entry.value += r.outstanding || 0;
-        break;
-      case "registrants":
-        if (r.student != null) entry.studentSet.add(String(r.student));
-        break;
-      default:
-        break;
+    if (metric === "registrants") {
+      if (r.student != null) entry.studentSet.add(String(r.student));
+    } else {
+      entry.value += contributionOf(r);
+    }
+    if (byRepMode) {
+      const rk = r.rep ? String(r.rep) : UNASSIGNED;
+      if (rk === UNASSIGNED) hasUnassigned = true;
+      let per = entry.perRep.get(rk);
+      if (!per) {
+        per = { value: 0, studentSet: new Set() };
+        entry.perRep.set(rk, per);
+      }
+      if (metric === "registrants") {
+        if (r.student != null) per.studentSet.add(String(r.student));
+      } else {
+        per.value += contributionOf(r);
+      }
     }
   }
 
   const data = Array.from(buckets.values())
     .sort((a, b) => a.start - b.start)
-    .map((e) => ({
-      key: e.key,
-      label: e.label,
-      value: metric === "registrants" ? e.studentSet.size : round2(e.value),
-    }));
+    .map((e) => {
+      const out = {
+        key: e.key,
+        label: e.label,
+        value: metric === "registrants" ? e.studentSet.size : round2(e.value),
+      };
+      if (byRepMode) {
+        out.byRep = {};
+        for (const [rk, per] of e.perRep) {
+          out.byRep[rk] =
+            metric === "registrants" ? per.studentSet.size : round2(per.value);
+        }
+      }
+      return out;
+    });
 
-  res.json({ success: true, data });
+  if (!byRepMode) {
+    return res.json({ success: true, data });
+  }
+
+  // sidecar יציב של כל הנציגות (כולל לא-פעילות, שעסקאות ישנות עדיין מפנות אליהן)
+  const repUsers = await User.find({ role: "rep" })
+    .select("name")
+    .sort({ _id: 1 })
+    .lean();
+  const reps = repUsers.map((u) => ({ repId: String(u._id), repName: u.name }));
+  if (hasUnassigned) reps.push({ repId: UNASSIGNED, repName: "ללא שיוך" });
+
+  res.json({ success: true, data, reps });
 });
 
 /**
