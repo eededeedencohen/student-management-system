@@ -2,11 +2,18 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import {
   startOfMonth,
+  startOfDay,
   addMonths,
+  addDays,
   bucketOf,
   nowFromReq,
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
+import {
+  cashDateOf,
+  creditClearingDate,
+  isCreditPayment,
+} from "../utils/cashTiming.js";
 import Registration from "../models/Registration.js";
 import Expense from "../models/Expense.js";
 
@@ -37,17 +44,19 @@ import Expense from "../models/Expense.js";
 const VAT_DIVISOR = 1.18; // 18% VAT (Israel)
 const MONTH_KEY = (date) => bucketOf(date, "month").key; // "YYYY-MM"
 
-/** Build the ordered list of month buckets covering [from, to] inclusive of the
- *  starting month of each. Returns array of {key,label,start} plus a key->index map. */
-function buildMonthBuckets(from, to) {
+const pad2 = (n) => String(n).padStart(2, "0");
+/** מפתח יציב לתאריך (YYYY-MM-DD, UTC). */
+const DATE_KEY = (d) =>
+  `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+
+/** Build the ordered list of buckets covering [from, to]:
+ *  - month (default): חודשים קלנדריים רגילים (MM/YYYY).
+ *  - day (?granularity=day): דלי לכל יום.
+ *  Returns array of {key,label,start} plus a key->index map. */
+function buildBuckets(from, to, granularity = "month") {
   const buckets = [];
   const index = new Map();
-  let cursor = startOfMonth(from);
-  const last = startOfMonth(to);
-  // Guard against pathological ranges so we never loop unbounded.
-  let safety = 0;
-  while (cursor <= last && safety < 600) {
-    const b = bucketOf(cursor, "month"); // {key,label,start}
+  const push = (b) => {
     index.set(b.key, buckets.length);
     buckets.push({
       key: b.key,
@@ -56,8 +65,26 @@ function buildMonthBuckets(from, to) {
       expectedIncome: 0,
       expectedExpense: 0,
     });
-    cursor = addMonths(cursor, 1);
-    safety += 1;
+  };
+  // Guard against pathological ranges so we never loop unbounded
+  // (day mode is capped at ~400 days; the client asks for far less).
+  let safety = 0;
+  if (granularity === "day") {
+    let cursor = startOfDay(from);
+    const last = startOfDay(to);
+    while (cursor <= last && safety < 400) {
+      push(bucketOf(cursor, "day"));
+      cursor = addDays(cursor, 1);
+      safety += 1;
+    }
+  } else {
+    let cursor = startOfMonth(from);
+    const last = startOfMonth(to);
+    while (cursor <= last && safety < 600) {
+      push(bucketOf(cursor, "month"));
+      cursor = addMonths(cursor, 1);
+      safety += 1;
+    }
   }
   return { buckets, index };
 }
@@ -101,10 +128,12 @@ function attributeIncome(
   firstMonthStart,
   includeVat,
   unscheduled,
+  keyOf = MONTH_KEY,
 ) {
   // v2 deals carry explicit future payments with real dueDates → place each unpaid
-  // payment in the month it's actually due (overdue ones clamp to the first month),
-  // instead of guessing from installment-count. This is the precise, correct path.
+  // payment in the bucket its CASH actually arrives (credit clears on the configured
+  // day of the following month; other methods land on the due date). Overdue ones
+  // clamp to the first bucket. This is the precise, correct path.
   if (reg.schemaVersion === 2) {
     let scheduledSum = 0;
     for (const p of reg.payments || []) {
@@ -113,10 +142,11 @@ function attributeIncome(
       if (amt <= 0) continue;
       scheduledSum += amt;
       const amount = includeVat ? amt : exVatIncome(amt, reg);
-      let monthStart = p.dueDate ? startOfMonth(p.dueDate) : firstMonthStart;
-      if (monthStart < firstMonthStart) monthStart = firstMonthStart; // never forecast in the past
-      const idx = index.get(MONTH_KEY(monthStart));
-      if (idx !== undefined) buckets[idx].expectedIncome += amount; // due beyond the window → dropped
+      const cash = cashDateOf(p); // אשראי → סליקה ב-7 לחודש העוקב (קבוע)
+      let at = cash || firstMonthStart;
+      if (at < firstMonthStart) at = firstMonthStart; // never forecast in the past
+      const idx = index.get(keyOf(at));
+      if (idx !== undefined) buckets[idx].expectedIncome += amount; // beyond the window → dropped
     }
     // יתרה שאין לה תשלומים עתידיים מתועדים (תוכנית שקיימת רק בהערה, או חוב בלי פריסה) -
     // כסף אמיתי שמגיע לעסק אך מועדו לא ידוע ⇒ נכנס למאגר "ללא מועד ידוע", לא נעלם.
@@ -139,8 +169,10 @@ function attributeIncome(
     const spread = Number(reg.installments) > 1 ? Number(reg.installments) : 1;
     const per = amount / spread;
     let monthStart = incomeAnchor(reg, firstMonthStart);
+    // אשראי: החיוב בחודש העוגן, אבל הכסף נסלק רק בחודש העוקב
+    if (cat === "credit") monthStart = addMonths(monthStart, 1);
     for (let i = 0; i < spread; i += 1) {
-      const idx = index.get(MONTH_KEY(monthStart));
+      const idx = index.get(keyOf(monthStart));
       // installments running past `to` fall outside the shown window
       if (idx !== undefined) buckets[idx].expectedIncome += per;
       monthStart = addMonths(monthStart, 1);
@@ -211,8 +243,19 @@ function recurrenceHitsMonth(exp, monthStart) {
   return false;
 }
 
-/** Attribute all expenses (fixed/recurring + variable one-offs) into buckets. */
-function attributeExpenses(expenses, buckets, index, includeVat) {
+/**
+ * Attribute all expenses (fixed/recurring + variable one-offs) into buckets.
+ * כל הוצאה משובצת לפי תאריך החיוב שלה בפועל (חוזרת: יום-בחודש שלה, ברירת
+ * מחדל ה-1) דרך אותו keyOf של ההכנסות - כך היא נופלת לחודש-התזרים הנכון גם
+ * כשהעמודות מעוגנות לאמצע חודש קלנדרי.
+ */
+function attributeExpenses(expenses, buckets, index, includeVat, keyOf) {
+  if (buckets.length === 0) return;
+  const windowStart = buckets[0].start;
+  const windowEndMonth = addMonths(
+    startOfMonth(buckets[buckets.length - 1].start),
+    1,
+  );
   for (const exp of expenses) {
     const recurring =
       exp.recurrence === "monthly" ||
@@ -220,14 +263,23 @@ function attributeExpenses(expenses, buckets, index, includeVat) {
       exp.recurrence === "yearly";
 
     if (recurring) {
-      // Recurring: emit into every applicable month within the window.
       const amt = expenseAmount(exp, includeVat);
-      for (const b of buckets) {
-        if (recurrenceHitsMonth(exp, b.start)) b.expectedExpense += amt;
+      const day = Math.min(Math.max(parseInt(exp.dayOfMonth, 10) || 1, 1), 28);
+      // מופעים על פני החודשים הקלנדריים שנוגעים בחלון (בתוספת חודש בכל צד)
+      let m = addMonths(startOfMonth(windowStart), -1);
+      while (m <= windowEndMonth) {
+        if (recurrenceHitsMonth(exp, m)) {
+          const at = new Date(
+            Date.UTC(m.getUTCFullYear(), m.getUTCMonth(), day),
+          );
+          const idx = index.get(keyOf(at));
+          if (idx !== undefined) buckets[idx].expectedExpense += amt;
+        }
+        m = addMonths(m, 1);
       }
     } else if (exp.date) {
-      // Variable one-off: counts in the month of its date if within range.
-      const idx = index.get(MONTH_KEY(exp.date));
+      // Variable one-off: counts in the bucket of its date if within range.
+      const idx = index.get(keyOf(exp.date));
       if (idx !== undefined)
         buckets[idx].expectedExpense += expenseAmount(exp, includeVat);
     }
@@ -236,7 +288,9 @@ function attributeExpenses(expenses, buckets, index, includeVat) {
 
 /**
  * GET /api/cashflow/forecast
- * Query: ?from, ?to (default today..+6 months), ?vat=true|false (default true).
+ * Query: ?from, ?to (default today..+6 months), ?vat=true|false (default true),
+ *        ?granularity=month|day (ברירת מחדל month; day = תצוגה לפי ימים ספציפיים,
+ *        שבה רואים בדיוק באיזה יום בחודש הכסף נכנס - למשל יום הסליקה).
  */
 export const forecast = asyncHandler(async (req, res) => {
   // --- resolve the forecast window ---
@@ -250,28 +304,35 @@ export const forecast = asyncHandler(async (req, res) => {
   }
   if (to < from) throw ApiError.badRequest("to חייב להיות אחרי from");
 
-  // מצב "הצג הכול": הטווח מתרחב אוטומטית עד חודש התשלום המתוזמן האחרון,
-  // כך שכל העמודות המתוארכות מוצגות ורק אחריהן עמודת "תאריך לא ידוע".
+  const granularity = req.query.granularity === "day" ? "day" : "month";
+  const keyOf =
+    granularity === "day" ? (d) => bucketOf(d, "day").key : (d) => MONTH_KEY(d);
+
+  // מצב "הצג הכול": הטווח מתרחב אוטומטית עד חודש קבלת-הכסף האחרונה (מועד
+  // סליקה לאשראי, מועד תשלום לשאר), כך שכל העמודות המתוארכות מוצגות ורק
+  // אחריהן עמודת "תאריך לא ידוע".
   if (req.query.full === "1") {
     const lastFilter = {
       outstanding: { $gt: 0 },
       recordType: { $in: ["registration", "collection_followup"] },
     };
     applySince(req, lastFilter);
-    const [lastRow] = await Registration.aggregate([
-      { $match: lastFilter },
-      { $unwind: "$payments" },
-      { $match: { "payments.paid": false, "payments.dueDate": { $ne: null } } },
-      { $group: { _id: null, last: { $max: "$payments.dueDate" } } },
-    ]);
-    if (lastRow?.last && new Date(lastRow.last) > to)
-      to = new Date(lastRow.last);
+    const rows = await Registration.find(lastFilter).select("payments").lean();
+    let last = null;
+    for (const r of rows) {
+      for (const p of r.payments || []) {
+        if (p.paid || !p.dueDate) continue;
+        const cash = cashDateOf(p);
+        if (cash && (!last || cash > last)) last = cash;
+      }
+    }
+    if (last && last > to) to = last;
   }
 
   // vat=true (default) keeps VAT; vat=false strips it.
   const includeVat = req.query.vat !== "false";
 
-  const { buckets, index } = buildMonthBuckets(from, to);
+  const { buckets, index } = buildBuckets(from, to, granularity);
   const firstMonthStart = buckets.length
     ? buckets[0].start
     : startOfMonth(from);
@@ -299,7 +360,48 @@ export const forecast = asyncHandler(async (req, res) => {
       firstMonthStart,
       includeVat,
       unscheduled,
+      keyOf,
     );
+  }
+
+  // --- INCOME: חיובי אשראי שכבר בוצעו וממתינים לסליקה (ה-7 בחודש העוקב) ---
+  // הלקוח כבר חויב (paid=true), אבל הכסף מגיע לחשבון רק במועד הסליקה - אם
+  // מועד הסליקה בתוך החלון, זו הכנסה צפויה אמיתית שקודם לא הופיעה בשום מקום.
+  // חיובים מהחודש שלפני תחילת החלון הם המוקדמים ביותר שנסלקים בתוכו.
+  const creditClearing = { total: 0, count: 0 };
+  {
+    // גבול רחב (תחילת החודש הקלנדרי הקודם) - הסינון המדויק נעשה לפי מועד הסליקה
+    const chargeFrom = addMonths(startOfMonth(firstMonthStart), -1);
+    const clearingFilter = {
+      schemaVersion: 2,
+      recordType: { $in: ["registration", "collection_followup"] },
+      payments: {
+        $elemMatch: {
+          paid: true,
+          method: "credit",
+          dueDate: { $gte: chargeFrom },
+        },
+      },
+    };
+    applySince(req, clearingFilter);
+    const clearingDeals = await Registration.find(clearingFilter)
+      .select("totalAmount amountExVat payments")
+      .lean();
+    for (const reg of clearingDeals) {
+      for (const p of reg.payments || []) {
+        if (!p.paid || !isCreditPayment(p) || !p.dueDate) continue;
+        const amt = Number(p.amount) || 0;
+        if (amt <= 0) continue;
+        const clearing = creditClearingDate(p.dueDate);
+        if (clearing < firstMonthStart) continue; // נסלק לפני החלון - כבר בבנק
+        const idx = index.get(keyOf(clearing));
+        if (idx === undefined) continue; // מעבר לקצה החלון
+        const amount = includeVat ? amt : exVatIncome(amt, reg);
+        buckets[idx].expectedIncome += amount;
+        creditClearing.total += amount;
+        creditClearing.count += 1;
+      }
+    }
   }
 
   // --- EXPENSE: recurring (any cadence) always, plus variable one-offs in range ---
@@ -321,7 +423,7 @@ export const forecast = asyncHandler(async (req, res) => {
   })
     .select("amount vatIncluded recurrence dayOfMonth date startDate endDate")
     .lean();
-  attributeExpenses(expenses, buckets, index, includeVat);
+  attributeExpenses(expenses, buckets, index, includeVat, keyOf);
 
   // --- finalize: round, compute net + running cumulative + totals ---
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -364,9 +466,21 @@ export const forecast = asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    data: { months, totals, unscheduledIncome, refundsDue },
+    data: {
+      months,
+      totals,
+      unscheduledIncome,
+      refundsDue,
+      granularity,
+      // כסף שכבר חויב באשראי וממתין לסליקה בתוך החלון (נכלל בעמודות)
+      creditClearing: {
+        total: round2(creditClearing.total),
+        count: creditClearing.count,
+      },
+    },
   });
 });
+
 
 /**
  * GET /api/cashflow/month-detail?month=YYYY-MM&windowFrom=YYYY-MM-DD&vat=true|false
@@ -375,9 +489,19 @@ export const forecast = asyncHandler(async (req, res) => {
  * תשלום עתידי משובץ לחודש של תאריך היעד שלו; תשלום שמועדו עבר נצמד לחודש הראשון בחלון.
  */
 export const monthDetail = asyncHandler(async (req, res) => {
-  const m = /^(\d{4})-(\d{2})$/.exec(String(req.query.month || ""));
-  if (!m) throw ApiError.badRequest("חודש לא תקין (פורמט YYYY-MM)");
-  const monthStart = new Date(Date.UTC(+m[1], +m[2] - 1, 1));
+  const raw = String(req.query.month || "");
+  let monthStart;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    // תאריך של יום (לחיצה על עמודת-יום): החודש הקלנדרי שמכיל אותו
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) throw ApiError.badRequest("חודש לא תקין");
+    monthStart = startOfMonth(d);
+  } else if (/^\d{4}-\d{2}$/.test(raw)) {
+    const [y, mo] = raw.split("-").map(Number);
+    monthStart = new Date(Date.UTC(y, mo - 1, 1));
+  } else {
+    throw ApiError.badRequest("חודש לא תקין (פורמט YYYY-MM או YYYY-MM-DD)");
+  }
   const monthEnd = addMonths(monthStart, 1);
   const includeVat = req.query.vat !== "false";
   const windowFrom = req.query.windowFrom
@@ -406,15 +530,13 @@ export const monthDetail = asyncHandler(async (req, res) => {
         if (p.paid) continue;
         const amt = Number(p.amount) || 0;
         if (amt <= 0) continue;
-        const due = p.dueDate ? new Date(p.dueDate) : null;
-        const bucket =
-          due && (!windowFrom || due >= windowFrom)
-            ? startOfMonth(due)
-            : windowFrom || (due ? startOfMonth(due) : null);
-        if (!bucket || bucket.getTime() !== monthStart.getTime()) {
-          // תשלום שמועדו עבר נצמד לחודש הראשון בחלון בלבד
-          if (!(isFirstMonth && due && due < windowFrom)) continue;
-        }
+        // השיבוץ לעמודה נעשה לפי מועד קבלת הכסף (אשראי → סליקה ב-7 לחודש העוקב)
+        const cash = p.dueDate ? cashDateOf(p) : null;
+        const inBucket = cash && cash >= monthStart && cash < monthEnd;
+        // תשלום שמועד הכסף שלו עבר (או חסר תאריך) נצמד לעמודה הראשונה בלבד
+        const clampedHere =
+          isFirstMonth && (!cash || (windowFrom && cash < windowFrom));
+        if (!inBucket && !clampedHere) continue;
         income.push({
           student: reg.student,
           studentName: reg.studentName,
@@ -423,7 +545,8 @@ export const monthDetail = asyncHandler(async (req, res) => {
           method: p.method || p.methodCategory || "",
           note: p.note || "",
           dueDate: p.dueDate,
-          overdue: Boolean(due && windowFrom && due < windowFrom),
+          cashDate: cash,
+          overdue: Boolean(cash && windowFrom && cash < windowFrom),
           amount: round2(includeVat ? amt : exVatIncome(amt, reg)),
         });
       }
@@ -434,8 +557,11 @@ export const monthDetail = asyncHandler(async (req, res) => {
       const gross = Number(reg.outstanding) || 0;
       const amount = includeVat ? gross : exVatIncome(gross, reg);
       let cursor = incomeAnchor(reg, windowFrom || monthStart);
+      // אשראי: הכסף נסלק בחודש העוקב לחיוב (כמו בתחזית)
+      if ((reg.paymentCategory || "") === "credit")
+        cursor = addMonths(cursor, 1);
       for (let i = 0; i < spread; i += 1) {
-        if (cursor.getTime() === monthStart.getTime()) {
+        if (cursor >= monthStart && cursor < monthEnd) {
           income.push({
             student: reg.student,
             studentName: reg.studentName,
@@ -452,6 +578,53 @@ export const monthDetail = asyncHandler(async (req, res) => {
       }
     }
   }
+
+  // --- חיובי אשראי שכבר בוצעו ונסלקים בעמודה הזו (ה-7 בחודש) - כמו בתחזית ---
+  {
+    // גבולות רחבים סביב העמודה - הסינון המדויק לפי מועד הסליקה נעשה בהמשך
+    const chargeFrom = addMonths(startOfMonth(monthStart), -1);
+    const chargeTo = startOfMonth(monthEnd);
+    const clearingFilter = {
+      schemaVersion: 2,
+      recordType: { $in: ["registration", "collection_followup"] },
+      payments: {
+        $elemMatch: {
+          paid: true,
+          method: "credit",
+          dueDate: { $gte: chargeFrom, $lt: chargeTo },
+        },
+      },
+    };
+    applySince(req, clearingFilter);
+    const clearingDeals = await Registration.find(clearingFilter)
+      .select(
+        "student studentName courseRaw courseField repName totalAmount amountExVat payments",
+      )
+      .lean();
+    for (const reg of clearingDeals) {
+      for (const p of reg.payments || []) {
+        if (!p.paid || !isCreditPayment(p) || !p.dueDate) continue;
+        const amt = Number(p.amount) || 0;
+        if (amt <= 0) continue;
+        const clearing = creditClearingDate(p.dueDate);
+        if (clearing < monthStart) continue;
+        if (clearing >= monthEnd) continue;
+        income.push({
+          student: reg.student,
+          studentName: reg.studentName,
+          course: reg.courseRaw || reg.courseField || "",
+          repName: reg.repName || "",
+          method: "credit",
+          note: "ממתין לסליקה - הלקוח כבר חויב",
+          dueDate: p.dueDate,
+          cashDate: clearing,
+          overdue: false,
+          pendingClearing: true,
+          amount: round2(includeVat ? amt : exVatIncome(amt, reg)),
+        });
+      }
+    }
+  }
   income.sort((a, b) => b.amount - a.amount);
 
   // --- הוצאות החודש ---
@@ -464,10 +637,26 @@ export const monthDetail = asyncHandler(async (req, res) => {
   const expenseItems = [];
   for (const exp of expenses) {
     let hits = false;
-    if (exp.recurrence && exp.recurrence !== "none")
-      hits = recurrenceHitsMonth(exp, monthStart);
-    else if (exp.date)
+    if (exp.recurrence && exp.recurrence !== "none") {
+      // הוצאה חוזרת שייכת לעמודה אם תאריך החיוב שלה (יום-בחודש) נופל בטווח שלה
+      const day = Math.min(Math.max(parseInt(exp.dayOfMonth, 10) || 1, 1), 28);
+      const candidates = [
+        startOfMonth(monthStart),
+        addMonths(startOfMonth(monthStart), 1),
+      ];
+      for (const m of candidates) {
+        if (!recurrenceHitsMonth(exp, m)) continue;
+        const at = new Date(
+          Date.UTC(m.getUTCFullYear(), m.getUTCMonth(), day),
+        );
+        if (at >= monthStart && at < monthEnd) {
+          hits = true;
+          break;
+        }
+      }
+    } else if (exp.date) {
       hits = new Date(exp.date) >= monthStart && new Date(exp.date) < monthEnd;
+    }
     if (!hits) continue;
     expenseItems.push({
       name: exp.name,
@@ -482,6 +671,7 @@ export const monthDetail = asyncHandler(async (req, res) => {
     success: true,
     data: {
       month: req.query.month,
+      bucketStart: DATE_KEY(monthStart), // תחילת חודש-התזרים שנפתר בפועל
       income,
       expenses: expenseItems,
       totals: {
