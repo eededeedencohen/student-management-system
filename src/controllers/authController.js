@@ -4,8 +4,8 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { signToken } from "../utils/token.js";
 
-/** רישום כניסה (best-effort) - לעולם לא מפיל את ההתחברות עצמה. */
-async function recordLogin(req, user) {
+/** רישום כניסה/חזרה (best-effort) - לעולם לא מפיל את הבקשה עצמה. */
+async function recordLogin(req, user, kind = "login") {
   try {
     const fwd = String(req.headers["x-forwarded-for"] || "")
       .split(",")[0]
@@ -15,12 +15,36 @@ async function recordLogin(req, user) {
       name: user.name,
       role: user.role,
       superAdmin: user.superAdmin === true,
+      kind,
       at: new Date(),
       ip: fwd || req.socket?.remoteAddress || "",
       userAgent: req.headers["user-agent"] || "",
     });
   } catch {
     /* לוג כניסות הוא מִשְׁני - לא נכשל בגללו */
+  }
+}
+
+const RESUME_THROTTLE_MS = 30 * 60 * 1000; // resume נרשם לכל היותר פעם בחצי שעה
+
+/**
+ * רישום "חזרה למערכת" (resume): הטוקן תקף 30 יום, ולכן פתיחת האפליקציה בלי
+ * מסך התחברות היא הכניסה המעשית של רוב המשתמשים - בלי זה יומן הכניסות מפספס
+ * אותן לגמרי (בדיוק מה שקרה עם יקיר). נרשם עבור המשתמש האמיתי (לא מתחזה),
+ * מרוסן לחצי שעה, ולעולם אינו מפיל את הבקשה.
+ */
+async function recordResumeThrottled(req, realUser) {
+  try {
+    if (!realUser?._id || realUser.isAdminToken) return;
+    const last = await LoginEvent.findOne({ user: realUser._id })
+      .sort({ at: -1 })
+      .select("at")
+      .lean();
+    if (last && Date.now() - new Date(last.at).getTime() < RESUME_THROTTLE_MS)
+      return;
+    await recordLogin(req, realUser, "resume");
+  } catch {
+    /* לוג כניסות הוא מִשְׁני */
   }
 }
 
@@ -124,6 +148,8 @@ export const me = asyncHandler(async (req, res) => {
 
   // The REAL signed-in user decides whether the "view as" switcher is available.
   const real = req.impersonator || req.user;
+  // חזרה לאפליקציה עם טוקן שמור = כניסה מעשית - נרשמת ביומן (מרוסן לחצי שעה)
+  await recordResumeThrottled(req, real);
   data.canImpersonate = real?.superAdmin === true;
   data.impersonating = req.impersonator
     ? { _id: String(u._id), name: u.name, role: u.role }
@@ -187,14 +213,21 @@ export const loginActivity = asyncHandler(async (req, res) => {
     .select("name role")
     .lean();
 
-  // סיכום כניסות אחרונות לכל משתמש מתוך יומן הכניסות
+  // סיכום לכל משתמש: כניסה אחרונה (מסך התחברות), נראה/תה לאחרונה (כל פעילות),
+  // ומספר כניסות. resume = חזרה עם טוקן שמור, נספרת כ"נראה לאחרונה".
   const agg = await LoginEvent.aggregate([
     { $match: { user: { $nin: superIds } } },
     {
       $group: {
         _id: "$user",
-        lastAt: { $max: "$at" },
-        count: { $sum: 1 },
+        lastSeenAt: { $max: "$at" },
+        lastLoginAt: {
+          $max: { $cond: [{ $ne: ["$kind", "resume"] }, "$at", null] },
+        },
+        loginCount: {
+          $sum: { $cond: [{ $ne: ["$kind", "resume"] }, 1, 0] },
+        },
+        seenCount: { $sum: 1 },
       },
     },
   ]);
@@ -207,14 +240,16 @@ export const loginActivity = asyncHandler(async (req, res) => {
         userId: String(u._id),
         name: u.name,
         role: u.role,
-        lastLoginAt: hit?.lastAt || null,
-        loginCount: hit?.count || 0,
+        lastLoginAt: hit?.lastLoginAt || null,
+        lastSeenAt: hit?.lastSeenAt || null,
+        loginCount: hit?.loginCount || 0,
+        seenCount: hit?.seenCount || 0,
       };
     })
     .sort((a, b) => {
-      if (!a.lastLoginAt) return 1;
-      if (!b.lastLoginAt) return -1;
-      return new Date(b.lastLoginAt) - new Date(a.lastLoginAt);
+      if (!a.lastSeenAt) return 1;
+      if (!b.lastSeenAt) return -1;
+      return new Date(b.lastSeenAt) - new Date(a.lastSeenAt);
     });
 
   const events = await LoginEvent.find({ user: { $nin: superIds } })
@@ -231,6 +266,7 @@ export const loginActivity = asyncHandler(async (req, res) => {
         userId: e.user ? String(e.user) : null,
         name: e.name,
         role: e.role,
+        kind: e.kind || "login",
         at: e.at,
         ip: e.ip || "",
         userAgent: e.userAgent || "",
