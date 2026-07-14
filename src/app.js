@@ -17,6 +17,7 @@ import commissionRoutes from './routes/commissionRoutes.js';
 import goalRoutes from './routes/goalRoutes.js';
 import leadRoutes from './routes/leadRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
+import externalRoutes from './routes/externalRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 
@@ -46,6 +47,7 @@ app.use('/api/commissions', commissionRoutes);
 app.use('/api/goals', goalRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
 
 // --- serve the built client (single-server mode) ---------------------------
 // The client's production build is copied to server/public. We serve its assets

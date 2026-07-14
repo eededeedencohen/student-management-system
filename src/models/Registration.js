@@ -52,6 +52,21 @@ const checklistSchema = new Schema(
   { _id: false },
 );
 
+// חוזה דיגיטלי: קישור ייחודי (token) שבו הלקוח קורא את החוזה וחותם ביד/עכבר.
+// חתימה מעדכנת אוטומטית את checklist.signedTakanon של העסקה.
+const contractSchema = new Schema(
+  {
+    token: { type: String }, // מזהה ייחודי לקישור הציבורי (אקראי, לא ניתן לניחוש)
+    status: { type: String, enum: ["pending", "signed"], default: "pending" },
+    createdAt: { type: Date },
+    viewedAt: { type: Date }, // צפייה ראשונה של הלקוח בחוזה
+    signedAt: { type: Date },
+    signerName: { type: String }, // השם שהוקלד באישור החתימה
+    signatureDataUrl: { type: String }, // תמונת החתימה (data URL)
+  },
+  { _id: false },
+);
+
 // One scheduled installment in a payment plan (e.g. ERN/credit "1/6", due 15/07/2026).
 const installmentSchema = new Schema(
   {
@@ -132,6 +147,8 @@ const registrationSchema = new Schema(
     // --- checklist & flags ---
     checklist: { type: checklistSchema, default: () => ({}) },
     checklistComplete: { type: Boolean, default: false },
+    // --- חוזה דיגיטלי (טופס חיצוני) ---
+    contract: { type: contractSchema },
 
     // לוח תשלומים צפוי (פריסת אשראי/ERN) - נוצר מהפירוט הטקסטואלי + שורות "N/M".
     installmentPlan: { type: [installmentSchema], default: [] },
