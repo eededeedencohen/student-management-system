@@ -1,7 +1,28 @@
 import User from "../models/User.js";
+import LoginEvent from "../models/LoginEvent.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { signToken } from "../utils/token.js";
+
+/** רישום כניסה (best-effort) - לעולם לא מפיל את ההתחברות עצמה. */
+async function recordLogin(req, user) {
+  try {
+    const fwd = String(req.headers["x-forwarded-for"] || "")
+      .split(",")[0]
+      .trim();
+    await LoginEvent.create({
+      user: user._id,
+      name: user.name,
+      role: user.role,
+      superAdmin: user.superAdmin === true,
+      at: new Date(),
+      ip: fwd || req.socket?.remoteAddress || "",
+      userAgent: req.headers["user-agent"] || "",
+    });
+  } catch {
+    /* לוג כניסות הוא מִשְׁני - לא נכשל בגללו */
+  }
+}
 
 /**
  * Build the public user payload returned to the client.
@@ -42,6 +63,7 @@ export const loginAs = asyncHandler(async (req, res) => {
   if (!user || !user.active)
     throw ApiError.unauthorized("המשתמש לא קיים או לא פעיל");
 
+  await recordLogin(req, user);
   const token = signToken({ id: user._id, role: user.role });
   res.json({ success: true, data: { token, user: publicUser(user) } });
 });
@@ -72,6 +94,7 @@ export const login = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized("אימייל או סיסמה שגויים");
   }
 
+  await recordLogin(req, user);
   const token = signToken({ id: user._id, role: user.role });
 
   res.json({
@@ -144,4 +167,74 @@ export const changePassword = asyncHandler(async (req, res) => {
   await user.save();
 
   res.json({ success: true, data: { message: "הסיסמה עודכנה בהצלחה" } });
+});
+
+/**
+ * GET /api/auth/login-activity  (super-admin + localhost only)
+ * מתי כל נציג/ה או מנהל (מלבד מנהל-העל עצמו) נכנס/ה למערכת: סיכום לכל משתמש
+ * (כניסה אחרונה + מספר כניסות) + רשימת הכניסות האחרונות. הגישה מוגבלת ע"י
+ * requireSuperAdminLocalhost בשכבת המסלול.
+ */
+export const loginActivity = asyncHandler(async (req, res) => {
+  // מנהל-העל (עדן) לא מופיע ברשימה - היא מיועדת לראות אחרים.
+  const supers = await User.find({ superAdmin: true }).select("_id").lean();
+  const superIds = supers.map((u) => u._id);
+
+  const users = await User.find({
+    active: true,
+    superAdmin: { $ne: true },
+  })
+    .select("name role")
+    .lean();
+
+  // סיכום כניסות אחרונות לכל משתמש מתוך יומן הכניסות
+  const agg = await LoginEvent.aggregate([
+    { $match: { user: { $nin: superIds } } },
+    {
+      $group: {
+        _id: "$user",
+        lastAt: { $max: "$at" },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+  const byUser = new Map(agg.map((r) => [String(r._id), r]));
+
+  const summary = users
+    .map((u) => {
+      const hit = byUser.get(String(u._id));
+      return {
+        userId: String(u._id),
+        name: u.name,
+        role: u.role,
+        lastLoginAt: hit?.lastAt || null,
+        loginCount: hit?.count || 0,
+      };
+    })
+    .sort((a, b) => {
+      if (!a.lastLoginAt) return 1;
+      if (!b.lastLoginAt) return -1;
+      return new Date(b.lastLoginAt) - new Date(a.lastLoginAt);
+    });
+
+  const events = await LoginEvent.find({ user: { $nin: superIds } })
+    .sort({ at: -1 })
+    .limit(200)
+    .lean();
+
+  res.json({
+    success: true,
+    data: {
+      summary,
+      events: events.map((e) => ({
+        id: String(e._id),
+        userId: e.user ? String(e.user) : null,
+        name: e.name,
+        role: e.role,
+        at: e.at,
+        ip: e.ip || "",
+        userAgent: e.userAgent || "",
+      })),
+    },
+  });
 });
