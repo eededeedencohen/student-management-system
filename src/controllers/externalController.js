@@ -168,6 +168,8 @@ export const createDeal = asyncHandler(async (req, res) => {
       englishName: englishName || undefined,
       idNumber: String((top?.studentNumber || 0) + 1), // ת.ז. סינתטית עוקבת (כמו בייבוא)
       realIdNumber: idNumber,
+      gender,
+      title,
       mobile: phone,
       email,
       city,
@@ -176,7 +178,6 @@ export const createDeal = asyncHandler(async (req, res) => {
       apartment: cleanStr(b.apartment) || undefined,
       notes:
         [
-          `מין: ${gender === "male" ? "זכר" : "נקבה"} · פנייה: ${title}`,
           zip ? `מיקוד: ${zip}` : "",
           addressNotes ? `הערות לכתובת: ${addressNotes}` : "",
         ]
@@ -185,8 +186,12 @@ export const createDeal = asyncHandler(async (req, res) => {
       studentNumber: (top?.studentNumber || 0) + 1,
     });
   } else {
-    // השלמת פרטים שנלמדו מהטופס (בלי לדרוס קיימים)
+    // השלמת פרטים שנלמדו מהטופס (בלי לדרוס קיימים).
+    // חריג: מין ופנייה נבחרים במפורש בטופס - הבחירה הטרייה דורסת את הקיים,
+    // כדי שהחוזה ינוסח לפי מה שסומן בעסקה הזו.
     if (!student.realIdNumber) student.realIdNumber = idNumber;
+    student.gender = gender;
+    student.title = title;
     if (!student.mobile) student.mobile = phone;
     if (!student.email) student.email = email;
     if (!student.city) student.city = city;
@@ -258,6 +263,33 @@ const findByToken = async (token) => {
   return reg;
 };
 
+/** תיאור אנושי של שיטת התשלום עבור החוזה ("אשראי ב-6 תשלומים", "העברה בנקאית"…). */
+function paymentMethodText(payments = []) {
+  const HE = {
+    credit: "אשראי",
+    ern: "הוראת קבע (ERN)",
+    cash: "מזומן",
+    transfer: "העברה בנקאית",
+  };
+  const parts = [];
+  const seen = new Set();
+  for (const p of payments) {
+    const m = p.method || "";
+    if (seen.has(m)) continue;
+    seen.add(m);
+    const ofMethod = payments.filter((x) => (x.method || "") === m);
+    const spread = ofMethod.find((x) => Number(x.installments) > 1);
+    if (m === "credit" && spread) {
+      parts.push(`אשראי ב-${spread.installments} תשלומים`);
+    } else if (ofMethod.length > 1) {
+      parts.push(`${HE[m] || m} - ${ofMethod.length} תשלומים`);
+    } else {
+      parts.push(HE[m] || m);
+    }
+  }
+  return parts.join(" + ") || "-";
+}
+
 /** GET /api/public/contract/:token — תוכן החוזה לצפייה/חתימה. */
 export const getContract = asyncHandler(async (req, res) => {
   const reg = await findByToken(req.params.token);
@@ -266,11 +298,20 @@ export const getContract = asyncHandler(async (req, res) => {
     await reg.save();
   }
   const signed = reg.contract.status === "signed";
+  // ת.ז. ומין של הנרשם/ת - הת.ז. שדה חובה בכתב; המין מטה את נוסח ההצהרות
+  const student = reg.student
+    ? await Student.findById(reg.student)
+        .select("realIdNumber idNumber gender")
+        .lean()
+    : null;
   res.json({
     success: true,
     data: {
       status: reg.contract.status,
       studentName: reg.studentName,
+      idNumber: student?.realIdNumber || student?.idNumber || "",
+      gender: student?.gender || null,
+      paymentMethodText: paymentMethodText(reg.payments),
       courseName: reg.courseRaw || "",
       cohortLabel: reg.cohortLabel || "",
       repName: reg.repName || "",
