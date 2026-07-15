@@ -195,8 +195,13 @@ export const getOne = asyncHandler(async (req, res) => {
   const registrations = await Registration.find(regFilter).sort({
     dealDate: -1,
   });
+  // הספירה האמיתית ללא סינון תקופה - המחיקה המדורגת מוחקת את כולן,
+  // ולכן אזהרת המחיקה חייבת להציג את המספר המלא ולא את המסונן
+  const regsTotal = sinceOf(req)
+    ? await Registration.countDocuments({ student: student._id })
+    : registrations.length;
 
-  res.json({ success: true, data: { student, registrations } });
+  res.json({ success: true, data: { student, registrations, regsTotal } });
 });
 
 /**
@@ -242,6 +247,9 @@ export const update = asyncHandler(async (req, res) => {
     "hebrewName",
     "englishName",
     "idNumber",
+    "realIdNumber",
+    "gender",
+    "title",
     "mobile",
     "email",
     "city",
@@ -254,6 +262,10 @@ export const update = asyncHandler(async (req, res) => {
   const updates = {};
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(b, key)) updates[key] = b[key];
+  }
+  // שדות enum: מחרוזת ריקה (ניקוי הבחירה) נשמרת כ-null, אחרת הולידציה נכשלת
+  for (const key of ["gender", "title"]) {
+    if (updates[key] === "") updates[key] = null;
   }
 
   if (
@@ -273,12 +285,20 @@ export const update = asyncHandler(async (req, res) => {
 });
 
 /**
- * DELETE /api/students/:id
- * מחיקת מסמך התלמיד/ה. הרישומים נשארים (משמרים studentName גולמי).
+ * DELETE /api/students/:id  (מנהלים בלבד)
+ * מחיקה מדורגת: כל העסקאות/הרשומות של התלמיד/ה נמחקות יחד עם מסמך התלמיד/ה.
  */
 export const remove = asyncHandler(async (req, res) => {
-  const student = await Student.findByIdAndDelete(req.params.id);
+  const student = await Student.findById(req.params.id);
   if (!student) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
 
-  res.json({ success: true, data: { _id: student._id } });
+  const { deletedCount } = await Registration.deleteMany({
+    student: student._id,
+  });
+  await student.deleteOne();
+
+  res.json({
+    success: true,
+    data: { _id: student._id, deletedRegistrations: deletedCount },
+  });
 });

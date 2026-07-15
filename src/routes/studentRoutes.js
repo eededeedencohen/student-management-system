@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect } from '../middleware/auth.js';
+import { protect, requireManager } from '../middleware/auth.js';
 import * as ctrl from '../controllers/studentController.js';
 
 const router = express.Router();
@@ -10,6 +10,7 @@ router.get('/', ctrl.list);
 router.get('/:id', ctrl.getOne);
 router.post('/', ctrl.create);
 router.put('/:id', ctrl.update);
-router.delete('/:id', ctrl.remove);
+// מחיקת תלמיד/ה גוררת מחיקת כל העסקאות - למנהלים בלבד
+router.delete('/:id', requireManager, ctrl.remove);
 
 export default router;
