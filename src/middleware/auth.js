@@ -50,6 +50,19 @@ export const requireManager = (req, res, next) => {
   next();
 };
 
+/**
+ * Restrict to the super-admin (עדן) only — no localhost requirement (unlike
+ * requireSuperAdminLocalhost). Uses the REAL user so it still applies while
+ * "viewing as" another user. Used by the emails feature.
+ */
+export const requireSuperAdmin = (req, res, next) => {
+  const real = req.impersonator || req.user;
+  if (real?.superAdmin !== true) {
+    throw ApiError.forbidden('הפעולה מותרת למנהל-העל (עדן) בלבד');
+  }
+  next();
+};
+
 /** True when the request's DIRECT peer is the loopback interface (local machine). */
 const isLoopbackPeer = (req) => {
   // בכוונה N OT משתמשים ב-x-forwarded-for (ניתן לזיוף): רק בכתובת ה-socket

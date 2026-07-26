@@ -24,6 +24,13 @@ const runErnAutoConfirm = async () => {
 
 const start = async () => {
   try {
+    // In production, refuse to boot without a real JWT_SECRET. Both auth tokens and the
+    // OAuth "state" that guards the public /api/emails/oauth/callback are signed with it;
+    // silently falling back to the published dev constant would make them forgeable.
+    if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+      console.error('❌  JWT_SECRET חייב להיות מוגדר בפרודקשן (אחרת טוקני התחברות ו-OAuth ניתנים לזיוף)');
+      process.exit(1);
+    }
     await connectDB();
     await runErnAutoConfirm(); // בעליית השרת
     setInterval(runErnAutoConfirm, DAY_MS).unref(); // ואחת ליום כל עוד השרת רץ
