@@ -2,6 +2,9 @@ import asyncHandler from '../utils/asyncHandler.js';
 import ApiError from '../utils/ApiError.js';
 import EmailAccount from '../models/EmailAccount.js';
 import Student from '../models/Student.js';
+import Registration from '../models/Registration.js';
+import ContractPdf from '../models/ContractPdf.js';
+import { contractEmailHtml } from '../utils/contractEmailHtml.js';
 import {
   isGoogleConfigured,
   redirectUri,
@@ -9,10 +12,10 @@ import {
   signOAuthState,
   verifyOAuthState,
   exchangeCodeForTokens,
-  refreshAccessToken,
   buildRawMessage,
   sendGmailMessage,
 } from '../utils/google.js';
+import { ensureAccessToken, sendOneEmail } from '../utils/mailer.js';
 
 const ACCOUNT_KEY = 'primary';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -203,41 +206,6 @@ export const recipients = asyncHandler(async (req, res) => {
 });
 
 /**
- * Return a fresh, valid access token — refreshing it if the current one expired.
- * `force:true` refreshes even if the stored token still looks unexpired (used to
- * recover when Gmail rejects a not-yet-expired token with 401).
- */
-async function ensureAccessToken(acct, { force = false } = {}) {
-  const stillValid =
-    !force && acct.accessToken && acct.expiryDate && new Date(acct.expiryDate).getTime() > Date.now() + 60_000;
-  if (stillValid) return acct.accessToken;
-  if (!acct.refreshToken) {
-    const e = ApiError.badRequest('החיבור ל-Google פג. יש להתחבר מחדש.');
-    e.fatalAuth = true;
-    throw e;
-  }
-  let refreshed;
-  try {
-    refreshed = await refreshAccessToken(acct.refreshToken);
-  } catch (err) {
-    if (err.code === 'invalid_grant') {
-      // The user revoked access (or the token expired) — drop it so the UI prompts reconnect.
-      await EmailAccount.deleteOne({ key: ACCOUNT_KEY });
-      const e = ApiError.badRequest('החיבור ל-Google בוטל. יש להתחבר מחדש.');
-      e.fatalAuth = true;
-      throw e;
-    }
-    const e = ApiError.badRequest(err.message || 'רענון ההרשאה מול Google נכשל');
-    e.fatalAuth = true; // a refresh failure will recur for every recipient — abort the batch
-    throw e;
-  }
-  acct.accessToken = refreshed.accessToken;
-  acct.expiryDate = refreshed.expiryDate;
-  await acct.save();
-  return acct.accessToken;
-}
-
-/**
  * POST /api/emails/send
  * body: {
  *   subject?, html?,                              // shared defaults
@@ -329,5 +297,110 @@ export const send = asyncHandler(async (req, res) => {
       abortReason: aborted ? abortReason : undefined,
       results,
     },
+  });
+});
+
+/**
+ * GET /api/emails/signed-contracts
+ * All signed contracts, so the super-admin can re-send the signed-PDF copy. `hasPdf`
+ * marks whether a stored PDF exists (contracts signed before this feature won't have one).
+ */
+export const signedContracts = asyncHandler(async (req, res) => {
+  const regs = await Registration.find({ 'contract.status': 'signed' })
+    .sort({ 'contract.signedAt': -1 })
+    .select('studentName student courseRaw contract.signedAt contract.emailedAt contract.emailedTo')
+    .lean();
+
+  const ids = regs.map((r) => r._id);
+  const studentIds = regs.map((r) => r.student).filter(Boolean);
+  const [pdfs, students] = await Promise.all([
+    ContractPdf.find({ registration: { $in: ids } }).select('registration').lean(),
+    Student.find({ _id: { $in: studentIds } }).select('email').lean(),
+  ]);
+  const hasPdf = new Set(pdfs.map((p) => String(p.registration)));
+  const emailById = new Map(students.map((s) => [String(s._id), s.email || '']));
+
+  res.json({
+    success: true,
+    data: regs.map((r) => ({
+      id: String(r._id),
+      studentName: r.studentName || '',
+      email: r.student ? emailById.get(String(r.student)) || '' : '',
+      courseName: r.courseRaw || '',
+      signedAt: r.contract?.signedAt || null,
+      emailedAt: r.contract?.emailedAt || null,
+      emailedTo: r.contract?.emailedTo || null,
+      hasPdf: hasPdf.has(String(r._id)),
+    })),
+  });
+});
+
+/**
+ * POST /api/emails/signed-contracts/resend
+ * body: { registrationIds?: string[], all?: boolean }
+ * Re-send the stored signed-PDF copy to signers (selected or all). Uses the stored PDF;
+ * a contract with no stored copy is reported 'no_pdf'. Updates emailedAt on each success.
+ */
+export const resendSignedContracts = asyncHandler(async (req, res) => {
+  const all = Boolean(req.body?.all);
+  const ids = Array.isArray(req.body?.registrationIds) ? req.body.registrationIds : [];
+  if (!all && ids.length === 0) throw ApiError.badRequest('יש לבחור לפחות חוזה אחד');
+
+  const filter = { 'contract.status': 'signed' };
+  if (!all) filter._id = { $in: ids };
+  const regs = await Registration.find(filter)
+    .sort({ 'contract.signedAt': -1 })
+    .select('studentName student courseRaw contract');
+  if (regs.length > 300) throw ApiError.badRequest('יותר מדי חוזים בבת אחת (עד 300)');
+
+  const results = [];
+  let aborted = false;
+  for (const reg of regs) {
+    const label = { id: String(reg._id), name: reg.studentName || '' };
+    const pdfDoc = await ContractPdf.findOne({ registration: reg._id }).lean();
+    if (!pdfDoc?.pdfBase64) {
+      results.push({ ...label, ok: false, reason: 'no_pdf' });
+      continue;
+    }
+    const student = reg.student
+      ? await Student.findById(reg.student).select('email firstName').lean()
+      : null;
+    const to = String(student?.email || '').trim().toLowerCase();
+    if (!to) {
+      results.push({ ...label, ok: false, reason: 'no_email' });
+      continue;
+    }
+    try {
+      await sendOneEmail({
+        to,
+        toName: reg.studentName || '',
+        subject: 'עותק חתום — תקנון מכללת ספרא',
+        html: contractEmailHtml({
+          name: student?.firstName || reg.studentName,
+          courseName: reg.courseRaw,
+        }),
+        attachments: [
+          { filename: pdfDoc.filename || 'contract.pdf', mimeType: 'application/pdf', base64: pdfDoc.pdfBase64 },
+        ],
+      });
+      reg.contract.emailedAt = new Date();
+      reg.contract.emailedTo = to;
+      reg.markModified('contract');
+      await reg.save();
+      results.push({ ...label, ok: true, to });
+    } catch (err) {
+      results.push({ ...label, ok: false, reason: err.notConnected ? 'not_connected' : err.message });
+      // account-level failure recurs for everyone — stop, keep collected results
+      if (err.notConnected || err.fatalAuth) {
+        aborted = true;
+        break;
+      }
+    }
+  }
+
+  const sent = results.filter((r) => r.ok).length;
+  res.json({
+    success: true,
+    data: { sent, failed: results.length - sent, total: regs.length, attempted: results.length, aborted, results },
   });
 });

@@ -5,6 +5,9 @@ import Registration from "../models/Registration.js";
 import Student from "../models/Student.js";
 import Course from "../models/Course.js";
 import User from "../models/User.js";
+import ContractPdf from "../models/ContractPdf.js";
+import { sendOneEmail } from "../utils/mailer.js";
+import { contractEmailHtml } from "../utils/contractEmailHtml.js";
 
 /**
  * externalController — הטופס החיצוני (ללא התחברות) + החוזה הדיגיטלי.
@@ -304,10 +307,13 @@ export const getContract = asyncHandler(async (req, res) => {
         .select("realIdNumber idNumber gender")
         .lean()
     : null;
+  // האם כבר נשמר עותק PDF? (לשימוש ה"ריפוי-עצמי" בצד הלקוח אם ההפקה נכשלה בעבר)
+  const pdfStored = signed ? Boolean(await ContractPdf.exists({ registration: reg._id })) : false;
   res.json({
     success: true,
     data: {
       status: reg.contract.status,
+      pdfStored,
       studentName: reg.studentName,
       idNumber: student?.realIdNumber || student?.idNumber || "",
       gender: student?.gender || null,
@@ -365,6 +371,103 @@ export const signContract = asyncHandler(async (req, res) => {
     success: true,
     data: { status: "signed", signedAt: reg.contract.signedAt },
   });
+});
+
+/**
+ * POST /api/public/contract/:token/email
+ * body: { pdfBase64, force? }
+ * מקבל את ה-PDF החתום, שומר עותק לשליחה חוזרת בעתיד, ושולח ללקוח. "מיטב-מאמץ":
+ * אם אין חשבון Google מחובר או אין מייל — לא נכשל, רק מדווח (וה-PDF כבר נשמר, כך
+ * שאפשר לשלוח מאוחר יותר מעמוד "מיילים"). חד-פעמי אלא אם force=true (שליחה חוזרת).
+ */
+export const emailSignedContract = asyncHandler(async (req, res) => {
+  const reg = await findByToken(req.params.token);
+  if (reg.contract.status !== "signed") {
+    throw ApiError.badRequest("החוזה טרם נחתם");
+  }
+  const force = Boolean(req.body?.force);
+
+  const pdfBase64 = String(req.body?.pdfBase64 || "")
+    .replace(/^data:application\/pdf;base64,/, "")
+    .replace(/\s+/g, "");
+  if (!pdfBase64 || pdfBase64.length < 1000) {
+    throw ApiError.badRequest("קובץ ה-PDF חסר או פגום");
+  }
+  if (pdfBase64.length > 14_000_000) {
+    throw ApiError.badRequest("קובץ ה-PDF גדול מדי");
+  }
+  // חייב להיות PDF אמיתי (הסימן "%PDF" = "JVBER" ב-base64) — לא להעלות בייטים שרירותיים
+  if (!pdfBase64.startsWith("JVBER")) {
+    throw ApiError.badRequest("הקובץ אינו PDF תקין");
+  }
+
+  const filename = `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
+
+  // שומרים עותק PDF רק בפעם הראשונה ($setOnInsert) — כדי שאפשר יהיה לשלוח שוב מאוחר
+  // יותר, אך בלי לאפשר לדרוס את "העותק החתום שברשומה" בהעלאה חוזרת (מניעת זיוף).
+  await ContractPdf.findOneAndUpdate(
+    { registration: reg._id },
+    {
+      $setOnInsert: {
+        registration: reg._id,
+        token: reg.contract.token,
+        filename,
+        pdfBase64,
+        byteLength: pdfBase64.length,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+
+  // חד-פעמי: לא שולחים שוב אם כבר נשלח (אלא אם force)
+  if (reg.contract.emailedAt && !force) {
+    return res.json({
+      success: true,
+      data: { emailed: true, already: true, to: reg.contract.emailedTo || null },
+    });
+  }
+
+  const student = reg.student
+    ? await Student.findById(reg.student).select("email firstName fullName").lean()
+    : null;
+  const to = cleanStr(student?.email).toLowerCase();
+  if (!to) {
+    return res.json({ success: true, data: { emailed: false, reason: "no_email" } });
+  }
+
+  try {
+    await sendOneEmail({
+      to,
+      toName: reg.studentName || "",
+      subject: "עותק חתום — תקנון מכללת ספרא",
+      html: contractEmailHtml({
+        name: student?.firstName || reg.studentName,
+        courseName: reg.courseRaw,
+      }),
+      attachments: [{ filename, mimeType: "application/pdf", base64: pdfBase64 }],
+    });
+  } catch (err) {
+    // לא מחובר / ההרשאה בוטלה — החתימה כבר הצליחה וה-PDF נשמר; לא מפילים את הזרימה.
+    if (err.notConnected || err.fatalAuth) {
+      return res.json({
+        success: true,
+        data: { emailed: false, reason: err.notConnected ? "not_connected" : "auth_failed" },
+      });
+    }
+    throw err;
+  }
+
+  reg.contract.emailedAt = new Date();
+  reg.contract.emailedTo = to;
+  reg.markModified("contract");
+  reg.noteEntries.push({
+    text: `עותק חתום של החוזה נשלח למייל ${to}`,
+    date: new Date(),
+    byName: "מערכת",
+  });
+  await reg.save();
+
+  res.json({ success: true, data: { emailed: true, to } });
 });
 
 /** GET /api/public/contract/:token/status — ל-polling חי מהטופס של הנציגה. */

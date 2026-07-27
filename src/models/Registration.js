@@ -63,6 +63,8 @@ const contractSchema = new Schema(
     signedAt: { type: Date },
     signerName: { type: String }, // השם שהוקלד באישור החתימה
     signatureDataUrl: { type: String }, // תמונת החתימה (data URL)
+    emailedAt: { type: Date }, // מתי נשלח עותק PDF חתום ללקוח (למניעת שליחה כפולה)
+    emailedTo: { type: String }, // כתובת המייל שאליה נשלח העותק
   },
   { _id: false },
 );

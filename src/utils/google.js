@@ -182,25 +182,61 @@ const formatAddress = (email, name) => {
 const wrap76 = (s) => s.replace(/.{1,76}/g, '$&\r\n').trimEnd();
 
 /**
- * Build a base64url-encoded RFC 5322 message ready for gmail.users.messages.send.
- * Body is sent as UTF-8 HTML. `from` is informational — Gmail sends as the
- * authenticated account regardless.
+ * Encode an attachment filename parameter. RFC 2047 encoded-words are NOT allowed
+ * inside a quoted MIME parameter, so for non-ASCII names use RFC 2231 (`name*=` /
+ * `filename*=UTF-8''<pct-encoded>`) with an ASCII fallback that strict clients read.
  */
-export const buildRawMessage = ({ from, fromName, to, toName, subject, html, replyTo }) => {
+const filenameParam = (param, name) => {
+  const s = String(name || 'attachment');
+  if (/^[\x20-\x7E]*$/.test(s)) return `${param}="${s.replace(/(["\\])/g, '\\$1')}"`;
+  const pct = encodeURIComponent(s).replace(/['()*!~]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `${param}="attachment.pdf"; ${param}*=UTF-8''${pct}`;
+};
+
+/**
+ * Build a base64url-encoded RFC 5322 message ready for gmail.users.messages.send.
+ * Body is sent as UTF-8 HTML. When `attachments` are given the message becomes
+ * multipart/mixed (HTML part + each file). `from` is informational — Gmail sends
+ * as the authenticated account regardless.
+ *
+ * @param {Array<{filename:string, mimeType:string, base64:string}>} [attachments]
+ */
+export const buildRawMessage = ({ from, fromName, to, toName, subject, html, replyTo, attachments }) => {
   const headers = [];
   // Omit From when the address is unknown — Gmail fills it with the authenticated
   // account. Setting a malformed/empty From would be rejected.
   if (from) headers.push(`From: ${formatAddress(from, fromName)}`);
   headers.push(`To: ${formatAddress(to, toName)}`);
   if (replyTo) headers.push(`Reply-To: ${replyTo}`);
-  headers.push(
-    `Subject: ${encodeHeaderWord(subject || '')}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/html; charset="UTF-8"',
-    'Content-Transfer-Encoding: base64',
-  );
-  const body = wrap76(Buffer.from(html || '', 'utf8').toString('base64'));
-  const mime = `${headers.join('\r\n')}\r\n\r\n${body}`;
+  headers.push(`Subject: ${encodeHeaderWord(subject || '')}`, 'MIME-Version: 1.0');
+
+  const htmlPart =
+    'Content-Type: text/html; charset="UTF-8"\r\n' +
+    'Content-Transfer-Encoding: base64\r\n\r\n' +
+    wrap76(Buffer.from(html || '', 'utf8').toString('base64'));
+
+  let mime;
+  const files = Array.isArray(attachments) ? attachments.filter((a) => a && a.base64) : [];
+  if (files.length === 0) {
+    mime = `${headers.join('\r\n')}\r\nContent-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(
+      Buffer.from(html || '', 'utf8').toString('base64'),
+    )}`;
+  } else {
+    const boundary = `=_safra_${Buffer.from(String(files.length) + subject).toString('base64url').slice(0, 24)}`;
+    const parts = [`--${boundary}\r\n${htmlPart}`];
+    for (const f of files) {
+      const b64 = wrap76(String(f.base64).replace(/\s+/g, ''));
+      parts.push(
+        `--${boundary}\r\n` +
+          `Content-Type: ${f.mimeType || 'application/octet-stream'}; ${filenameParam('name', f.filename)}\r\n` +
+          `Content-Transfer-Encoding: base64\r\n` +
+          `Content-Disposition: attachment; ${filenameParam('filename', f.filename)}\r\n\r\n` +
+          b64,
+      );
+    }
+    const bodyMultipart = `${parts.join('\r\n')}\r\n--${boundary}--`;
+    mime = `${headers.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n${bodyMultipart}`;
+  }
   return Buffer.from(mime, 'utf8').toString('base64url');
 };
 

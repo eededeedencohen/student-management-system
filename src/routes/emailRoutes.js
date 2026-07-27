@@ -18,4 +18,8 @@ router.post('/disconnect', ctrl.disconnect);
 router.get('/recipients', ctrl.recipients);
 router.post('/send', ctrl.send);
 
+// חוזים חתומים: רשימה + שליחה חוזרת של עותק ה-PDF (מנהל-העל)
+router.get('/signed-contracts', ctrl.signedContracts);
+router.post('/signed-contracts/resend', ctrl.resendSignedContracts);
+
 export default router;
