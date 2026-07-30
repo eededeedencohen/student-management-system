@@ -26,6 +26,8 @@ const studentSchema = new Schema(
     street: { type: String, trim: true }, // רחוב
     houseNumber: { type: String, trim: true }, // מספר בית
     apartment: { type: String, trim: true }, // דירה
+    zip: { type: String, trim: true }, // מיקוד
+    addressNotes: { type: String, trim: true }, // הערות לכתובת
     notes: { type: String, trim: true },
     sourceFile: { type: String }, // קובץ מקור בייבוא
   },

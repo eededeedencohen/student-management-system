@@ -103,6 +103,8 @@ const registrationSchema = new Schema(
     courseRaw: { type: String, trim: true }, // שם הקורס כפי שהופיע
     courseField: { type: String, trim: true }, // משפחת הקורס (canonical)
     cohortLabel: { type: String, trim: true }, // מחזור, למשל 9/25
+    // שיוך רשמי למחזור קורס (CourseCohort) — נקבע בעמוד עריכת הנתונים ע"י הנציגה
+    cohort: { type: Schema.Types.ObjectId, ref: "CourseCohort", index: true },
 
     // --- dates ---
     dealDate: { type: Date, index: true }, // תאריך עסקה
@@ -158,6 +160,14 @@ const registrationSchema = new Schema(
     // בדיקת התאמה: האם נגבה+עתידי = סה"כ העסקה. unbalanced -> reconcileNote מסביר.
     reconciled: { type: Boolean, default: true, index: true },
     reconcileNote: { type: String },
+
+    // --- עריכת נתונים ישנים: האם הנציגה עברה על העסקה, השלימה ואישרה אותה ---
+    dataReview: {
+      status: { type: String, enum: ["pending", "done"], default: "pending" },
+      by: { type: Schema.Types.ObjectId, ref: "User" },
+      byName: { type: String },
+      at: { type: Date },
+    },
 
     // --- classification (data is messy: some rows are ads / follow-ups) ---
     recordType: {
