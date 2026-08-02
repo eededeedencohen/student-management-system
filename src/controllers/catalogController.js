@@ -292,6 +292,61 @@ const parseCohortBody = async (b, existing) => {
   return out;
 };
 
+/**
+ * העמוד הראשי "קורסים", הגאנט, התאמת העסקאות והמכירות — כולם רצים על רשומות
+ * ה-Course הישנות. לכן מחזור שנוצר בטופס החדש (ולא מרשומת אקסל קיימת) מקבל
+ * רשומת Course תואמת ("mirror") שמזוהה ב-sourceFile הזה, וכל עריכת מחזור
+ * מסנכרנת אותה — כך העמוד הראשי תמיד משקף את המחזורים.
+ */
+export const COHORT_MIRROR_SOURCE = 'מחזור (מערכת)';
+
+const LEGACY_STATUS = { active: 'פעיל', future: 'עתידי', ended: 'הסתיים', cancelled: 'בוטל' };
+const WEEKDAY_LETTERS = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+
+/** שדות ה-Course הישן הנגזרים ממחזור. שם/מחיר נדרסים רק ב-mirror — לא ברשומת אקסל. */
+const legacyFieldsFromCohort = async (cohort, catalog, { includeNaming }) => {
+  const out = {};
+  if (includeNaming) {
+    out.name = `${catalog.name}${cohort.label ? ` ${cohort.label}` : ''}`;
+    out.field = catalog.name;
+    out.cohortLabel = cohort.label || '';
+    out.price = catalog.price || 0;
+  }
+  const sessions = [...(cohort.sessions || [])].sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (sessions.length) {
+    out.startDate = sessions[0].date;
+    out.endDate = sessions[sessions.length - 1].date;
+    out.sessionsCount = sessions.length;
+    // המפגשים נשמרים כחצות UTC, ולכן היום-בשבוע נקרא ב-UTC
+    out.weekday = WEEKDAY_LETTERS[new Date(sessions[0].date).getUTCDay()] || '';
+  }
+  if (cohort.defaultLocation) out.location = cohort.defaultLocation;
+  const teacherIds = (cohort.teachers || []).map(String);
+  if (teacherIds.length) {
+    const docs = await Teacher.find({ _id: { $in: teacherIds } }).select('fullName').lean();
+    const nameOf = new Map(docs.map((t) => [String(t._id), t.fullName]));
+    out.lecturer = teacherIds.map((id) => nameOf.get(id)).filter(Boolean).join(' + ');
+  }
+  out.status =
+    cohort.registrationOpen && (cohort.status === 'active' || cohort.status === 'future')
+      ? 'פתוח להרשמה'
+      : LEGACY_STATUS[cohort.status] || 'פעיל';
+  return out;
+};
+
+/** מסנכרן את רשומת ה-Course המקושרת (mirror או רשומת אקסל שמופה למחזור). */
+const syncLegacyCourse = async (cohort) => {
+  if (!cohort?.sourceCourse) return;
+  const [legacy, catalog] = await Promise.all([
+    Course.findById(cohort.sourceCourse),
+    CatalogCourse.findById(cohort.catalogCourse).lean(),
+  ]);
+  if (!legacy || !catalog) return;
+  const isMirror = legacy.sourceFile === COHORT_MIRROR_SOURCE;
+  Object.assign(legacy, await legacyFieldsFromCohort(cohort, catalog, { includeNaming: isMirror }));
+  await legacy.save();
+};
+
 export const createCohort = asyncHandler(async (req, res) => {
   const b = req.body || {};
   const data = await parseCohortBody(b, null);
@@ -303,8 +358,15 @@ export const createCohort = asyncHandler(async (req, res) => {
       throw ApiError.badRequest('לרשומת האקסל הזו כבר הוגדר מחזור');
     }
     data.sourceCourse = src._id;
+  } else {
+    // מחזור חדש שלא הוגדר מרשומת אקסל — יוצרים לו רשומת Course בעמוד הראשי
+    const catalog = await CatalogCourse.findById(data.catalogCourse).lean();
+    const fields = await legacyFieldsFromCohort(data, catalog, { includeNaming: true });
+    const mirror = await Course.create({ ...fields, sourceFile: COHORT_MIRROR_SOURCE, notes: data.notes || '' });
+    data.sourceCourse = mirror._id;
   }
   const c = await CourseCohort.create(data);
+  await syncLegacyCourse(c);
   res.status(201).json({ success: true, data: { id: String(c._id) } });
 });
 
@@ -314,6 +376,7 @@ export const updateCohort = asyncHandler(async (req, res) => {
   const data = await parseCohortBody(req.body || {}, c);
   Object.assign(c, data);
   await c.save();
+  await syncLegacyCourse(c);
   const populated = await CourseCohort.findById(c._id)
     .populate('catalogCourse', 'name price defaultSessionCount')
     .populate('teachers', 'fullName')
@@ -325,7 +388,12 @@ export const updateCohort = asyncHandler(async (req, res) => {
 export const deleteCohort = asyncHandler(async (req, res) => {
   const inUse = await Registration.exists({ cohort: req.params.id });
   if (inUse) throw ApiError.badRequest('לא ניתן למחוק — יש עסקאות המשויכות למחזור');
+  const c = await CourseCohort.findById(req.params.id).lean();
   await CourseCohort.deleteOne({ _id: req.params.id });
+  // רשומת mirror קיימת רק בזכות המחזור — נמחקת איתו. רשומת אקסל מקורית נשארת.
+  if (c?.sourceCourse) {
+    await Course.deleteOne({ _id: c.sourceCourse, sourceFile: COHORT_MIRROR_SOURCE });
+  }
   res.json({ success: true, data: { deleted: true } });
 });
 

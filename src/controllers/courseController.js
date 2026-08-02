@@ -2,6 +2,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import Course from "../models/Course.js";
 import Registration from "../models/Registration.js";
+import CourseCohort from "../models/CourseCohort.js";
 import { buildCourseIndex, matchDealToCourse } from "../utils/courseMatch.js";
 import { applySince, sinceOf } from "../utils/dataScope.js";
 
@@ -112,15 +113,21 @@ export const list = asyncHandler(async (req, res) => {
   if (status) filter.status = status;
   if (weekday) filter.weekday = weekday;
 
-  const [data, enrollment] = await Promise.all([
+  const [data, enrollment, cohortLinks] = await Promise.all([
     Course.find(filter).sort({ startDate: 1 }).lean(),
     computeEnrollment(req),
+    // אילו רשומות מקושרות למחזור (החדש) — עריכה שלהן נפתחת בטופס המחזור
+    CourseCohort.find({ sourceCourse: { $ne: null } }).select("sourceCourse").lean(),
   ]);
+  const cohortBySource = new Map(
+    cohortLinks.map((c) => [String(c.sourceCourse), String(c._id)]),
+  );
   const withCounts = data
     .map((c) => {
       const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
       return {
         ...c,
+        cohortId: cohortBySource.get(String(c._id)) || null,
         enrolledCount: dealsOfCourse.length,
         ...courseMoney(dealsOfCourse),
       };
@@ -236,6 +243,16 @@ export const update = asyncHandler(async (req, res) => {
  * מחיקת קורס.
  */
 export const remove = asyncHandler(async (req, res) => {
+  // רשומה שמקושרת למחזור: מוחקים גם את המחזור (אחרת הוא נשאר יתום ומופיע
+  // בעמוד המחזורים), אבל רק אם אין עסקאות משויכות אליו.
+  const cohort = await CourseCohort.findOne({ sourceCourse: req.params.id }).lean();
+  if (cohort) {
+    const inUse = await Registration.exists({ cohort: cohort._id });
+    if (inUse) {
+      throw ApiError.badRequest("לא ניתן למחוק — יש עסקאות המשויכות למחזור של הקורס");
+    }
+    await CourseCohort.deleteOne({ _id: cohort._id });
+  }
   const course = await Course.findByIdAndDelete(req.params.id);
   if (!course) throw ApiError.notFound("קורס לא נמצא");
   res.json({ success: true, data: { _id: course._id } });
