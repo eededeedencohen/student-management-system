@@ -482,3 +482,26 @@ export const contractStatus = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/**
+ * GET /api/public/contract/:token/pdf
+ * הורדת עותק ה-PDF החתום ע"י החותם עצמו — דרך אותו token סודי שמקנה גישה לחוזה.
+ * זמין רק אחרי חתימה; אם אין עותק שמור (חתימות ישנות) הקליינט מפיק אחד מקומית.
+ */
+export const downloadSignedContractPdf = asyncHandler(async (req, res) => {
+  const reg = await findByToken(req.params.token);
+  if (reg.contract.status !== "signed") {
+    throw ApiError.badRequest("החוזה טרם נחתם");
+  }
+  const doc = await ContractPdf.findOne({ registration: reg._id }).lean();
+  if (!doc?.pdfBase64) {
+    throw ApiError.notFound("אין עותק PDF שמור לחוזה זה");
+  }
+  const filename = doc.filename || `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+  return res.send(Buffer.from(doc.pdfBase64, "base64"));
+});

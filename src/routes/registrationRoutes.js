@@ -12,6 +12,7 @@ router.get("/", ctrl.list);
 // חייבים - registrations with outstanding>0 (before /:id so it isn't captured as an id)
 router.get("/debtors", ctrl.debtors);
 router.get("/:id", ctrl.detail);
+router.get("/:id/contract.pdf", ctrl.downloadContractPdf); // עותק ה-PDF החתום השמור
 
 router.post("/", ctrl.create);
 router.put("/:id", ctrl.update);

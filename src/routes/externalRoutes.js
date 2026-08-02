@@ -19,5 +19,6 @@ router.post(
   ctrl.emailSignedContract,
 );
 router.get("/contract/:token/status", ctrl.contractStatus);
+router.get("/contract/:token/pdf", ctrl.downloadSignedContractPdf); // הורדת העותק החתום ע"י החותם
 
 export default router;

@@ -675,3 +675,28 @@ export const remove = asyncHandler(async (req, res) => {
   await reg.deleteOne();
   res.json({ success: true, data: { _id: reg._id } });
 });
+
+/**
+ * GET /api/registrations/:id/contract.pdf
+ * מוריד את עותק ה-PDF החתום שנשמר לעסקה (נשמר אוטומטית אחרי חתימה).
+ * נציגה יכולה להוריד רק מעסקאות שלה — כמו בצפייה ברישום.
+ */
+export const downloadContractPdf = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id).select("rep contract studentName");
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אין הרשאה לצפות ברישום זה");
+  }
+  const { default: ContractPdf } = await import("../models/ContractPdf.js");
+  const doc = await ContractPdf.findOne({ registration: reg._id }).lean();
+  if (!doc?.pdfBase64) {
+    throw ApiError.notFound("אין עותק PDF שמור לעסקה זו (נשמר אוטומטית בחתימות חדשות)");
+  }
+  const filename = doc.filename || `תקנון-${reg.studentName || "חוזה"}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+  return res.send(Buffer.from(doc.pdfBase64, "base64"));
+});

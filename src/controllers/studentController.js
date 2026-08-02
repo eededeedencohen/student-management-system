@@ -201,7 +201,20 @@ export const getOne = asyncHandler(async (req, res) => {
     ? await Registration.countDocuments({ student: student._id })
     : registrations.length;
 
-  res.json({ success: true, data: { student, registrations, regsTotal } });
+  // לאילו עסקאות שמור עותק PDF חתום — מציג את כפתור ההורדה רק כשבאמת יש מה להוריד
+  const { default: ContractPdf } = await import("../models/ContractPdf.js");
+  const pdfDocs = await ContractPdf.find({
+    registration: { $in: registrations.map((r) => r._id) },
+  })
+    .select("registration")
+    .lean();
+  const withPdf = new Set(pdfDocs.map((d) => String(d.registration)));
+  const regsOut = registrations.map((r) => ({
+    ...r.toObject(),
+    contractPdfStored: withPdf.has(String(r._id)),
+  }));
+
+  res.json({ success: true, data: { student, registrations: regsOut, regsTotal } });
 });
 
 /**
