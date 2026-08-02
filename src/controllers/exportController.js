@@ -1,6 +1,8 @@
 /**
  * Export controller - Excel (xlsx) downloads.
- * כל הדוחות יוצאים כקובץ אקסל עם כותרות עמודות בעברית.
+ * כל הדוחות יוצאים כקובץ אקסל מעוצב: גיליון מימין-לשמאל, כותרות צבועות וקפואות,
+ * פסי זברה, רוחב עמודות לפי התוכן, פורמט ₪/תאריך, צביעת סטטוסים ושורת סיכום
+ * (utils/excelExport.js).
  *
  * Reps are scoped to their own data via scopeToRep (req.scopeRepId).
  * Managers see everything and may narrow with ?repId.
@@ -10,12 +12,12 @@
  * The debtors report is the documented exception: it includes ANY record with
  * outstanding > 0 regardless of recordType.
  */
-import XLSX from "xlsx";
 import Registration from "../models/Registration.js";
 import Course from "../models/Course.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { parseDateQuery } from "../utils/dateRanges.js";
+import { sendStyledWorkbook } from "../utils/excelExport.js";
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                            */
@@ -33,17 +35,22 @@ const statusLabel = (s) => PAYMENT_STATUS_HE[s] || s || "";
 /** Hebrew yes/no for the takanon (signed-contract) flag. */
 const yesNo = (v) => (v ? "כן" : "לא");
 
-/** Format a Date as dd/mm/yyyy (UTC) for sheet cells; '' when missing. */
-const fmtDate = (date) => {
-  if (!date) return "";
-  const x = new Date(date);
-  if (Number.isNaN(x.getTime())) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(x.getUTCDate())}/${pad(x.getUTCMonth() + 1)}/${x.getUTCFullYear()}`;
+/** תאריך לתא אקסל אמיתי (מקבל פורמט dd/mm/yyyy בגיליון); null כשחסר. */
+const asDate = (d) => {
+  if (!d) return null;
+  const x = new Date(d);
+  return Number.isNaN(x.getTime()) ? null : x;
 };
 
 /** Round money to 2 decimals (avoid float noise in the sheet). */
 const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** תאריך הפקה לתת-הכותרת של כל דוח. */
+const stamp = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 /**
  * Build the registrations filter, mirroring the registrations list endpoint.
@@ -89,27 +96,60 @@ const buildRegFilter = (req, { onlyRegistrations = true } = {}) => {
   return filter;
 };
 
-/**
- * Build a workbook from rows (array of plain objects with Hebrew keys) and
- * stream it back as an .xlsx attachment with a UTF-8 (RFC 5987) filename.
- */
-const sendWorkbook = (res, { rows, sheetName = "Sheet1", fileName }) => {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{}]);
-  // Sheet names are capped at 31 chars by the xlsx format.
-  XLSX.utils.book_append_sheet(wb, ws, String(sheetName).slice(0, 31));
-  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-
-  res.setHeader(
-    "Content-Type",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}.xlsx`,
-  );
-  return res.send(buffer);
+/** תיאור הסינון שנבחר, לתת-הכותרת — שיהיה ברור מה בדיוק יש בקובץ. */
+const describeRegFilters = async (req) => {
+  const parts = [];
+  if (req.query.repId && !req.scopeRepId) parts.push("נציגה מסוימת");
+  if (req.scopeRepId) parts.push("הנתונים שלך בלבד");
+  if (req.query.paymentStatus) parts.push(`סטטוס: ${statusLabel(req.query.paymentStatus)}`);
+  if (req.query.course) {
+    const c = await Course.findById(req.query.course).select("name").lean().catch(() => null);
+    if (c?.name) parts.push(`קורס: ${c.name}`);
+  }
+  if (req.query.from || req.query.to) {
+    parts.push(
+      `טווח: ${req.query.from || "ההתחלה"} עד ${req.query.to || "היום"}`,
+    );
+  }
+  return parts.length ? `סינון: ${parts.join(" · ")}` : "ללא סינון — כל הנתונים";
 };
+
+/* ------------------------------------------------------------------ */
+/* column layouts                                                     */
+/* ------------------------------------------------------------------ */
+
+// פריסת העמודות של דוח רישומים (משמשת גם את הדוח החודשי)
+const REG_COLUMNS = [
+  { header: "תאריך עסקה", key: "date", type: "date" },
+  { header: "שם הנרשם/ת", key: "name" },
+  { header: "ת.ז.", key: "idNumber" },
+  { header: "קורס", key: "course" },
+  { header: "מחזור", key: "cohort" },
+  { header: "נציגה", key: "rep" },
+  { header: 'סה"כ עסקה', key: "total", type: "money" },
+  { header: "שולם", key: "paid", type: "money" },
+  { header: "יתרה", key: "outstanding", type: "money" },
+  { header: "סטטוס תשלום", key: "status", type: "status" },
+  { header: "אופן תשלום", key: "method" },
+  { header: "תקנון", key: "takanon", type: "bool" },
+  { header: "הערות", key: "notes" },
+];
+
+const regRow = (r) => ({
+  date: asDate(r.dealDate),
+  name: r.studentName || "",
+  idNumber: r.idNumber || "",
+  course: r.courseRaw || r.courseField || "",
+  cohort: r.cohortLabel || "",
+  rep: r.repName || "",
+  total: money(r.totalAmount),
+  paid: money(r.totalPaid),
+  outstanding: money(r.outstanding),
+  status: statusLabel(r.paymentStatus),
+  method: r.primaryPaymentMethod || "",
+  takanon: yesNo(r.checklist?.signedTakanon),
+  notes: r.notes || "",
+});
 
 /* ------------------------------------------------------------------ */
 /* handlers                                                           */
@@ -118,37 +158,18 @@ const sendWorkbook = (res, { rows, sheetName = "Sheet1", fileName }) => {
 /**
  * GET /api/export/registrations.xlsx
  * Same filters as the registrations list. Only recordType==='registration'.
- * Columns (Hebrew): תאריך, שם הנרשם, ת.ז., קורס, מחזור, נציגה, סה"כ עסקה,
- *   שולם, יתרה, סטטוס תשלום, אופן תשלום, תקנון, הערות.
  */
 export const exportRegistrations = asyncHandler(async (req, res) => {
   const filter = buildRegFilter(req);
   const regs = await Registration.find(filter).sort({ dealDate: -1 }).lean();
 
-  const rows = regs.map((r) => ({
-    תאריך: fmtDate(r.dealDate),
-    "שם הנרשם": r.studentName || "",
-    "ת.ז.": r.idNumber || "",
-    קורס: r.courseRaw || r.courseField || "",
-    מחזור: r.cohortLabel || "",
-    נציגה: r.repName || "",
-    'סה"כ עסקה': money(r.totalAmount),
-    שולם: money(r.totalPaid),
-    יתרה: money(r.outstanding),
-    "סטטוס תשלום": statusLabel(r.paymentStatus),
-    "אופן תשלום": r.primaryPaymentMethod || "",
-    תקנון: yesNo(r.checklist?.signedTakanon),
-    הערות: r.notes || "",
-    "תאריך מקורי": r.dealDateRaw || "",
-    "קובץ מקור": r.sourceFile || "",
-    "גליון מקור": r.sourceSheet || "",
-    "שורת מקור": r.sourceRow || "",
-  }));
-
-  return sendWorkbook(res, {
-    rows,
+  return sendStyledWorkbook(res, "רישומים", {
     sheetName: "רישומים",
-    fileName: "registrations",
+    title: "כל הרישומים — מכללת ספרא",
+    subtitle: `${await describeRegFilters(req)} · הופק: ${stamp()} · ${regs.length} רשומות`,
+    columns: REG_COLUMNS,
+    rows: regs.map(regRow),
+    totals: ["total", "paid", "outstanding"],
   });
 });
 
@@ -156,7 +177,6 @@ export const exportRegistrations = asyncHandler(async (req, res) => {
  * GET /api/export/debtors.xlsx
  * Registrations with outstanding > 0 (חייבים). Intentionally includes ALL
  * recordTypes - this is the documented exception to the registration-only rule.
- * Columns (Hebrew): שם, קורס, נציגה, סה"כ, שולם, חוב, מתי לגבות.
  */
 export const exportDebtors = asyncHandler(async (req, res) => {
   // onlyRegistrations:false -> include collection follow-ups etc. that owe money
@@ -167,26 +187,40 @@ export const exportDebtors = asyncHandler(async (req, res) => {
     .sort({ nextPaymentDate: 1, dealDate: -1 })
     .lean();
 
-  const rows = regs.map((r) => ({
-    שם: r.studentName || "",
-    קורס: r.courseRaw || r.courseField || "",
-    נציגה: r.repName || "",
-    'סה"כ': money(r.totalAmount),
-    שולם: money(r.totalPaid),
-    חוב: money(r.outstanding),
-    "מתי לגבות": fmtDate(r.nextPaymentDate) || r.nextPaymentNote || "",
-    "קובץ מקור": r.sourceFile || "",
-    "שורת מקור": r.sourceRow || "",
-  }));
-
-  return sendWorkbook(res, { rows, sheetName: "חייבים", fileName: "debtors" });
+  return sendStyledWorkbook(res, "חייבים", {
+    sheetName: "חייבים",
+    title: "חייבים — יתרות פתוחות לגבייה",
+    subtitle: `כל רשומה עם חוב פתוח, ממוינת לפי מועד הגבייה הקרוב · הופק: ${stamp()} · ${regs.length} רשומות`,
+    columns: [
+      { header: "שם הנרשם/ת", key: "name" },
+      { header: "קורס", key: "course" },
+      { header: "נציגה", key: "rep" },
+      { header: 'סה"כ עסקה', key: "total", type: "money" },
+      { header: "שולם", key: "paid", type: "money" },
+      { header: "חוב", key: "debt", type: "money" },
+      { header: "מתי לגבות", key: "collect" },
+      { header: "הערות גבייה", key: "note" },
+    ],
+    rows: regs.map((r) => ({
+      name: r.studentName || "",
+      course: r.courseRaw || r.courseField || "",
+      rep: r.repName || "",
+      total: money(r.totalAmount),
+      paid: money(r.totalPaid),
+      debt: money(r.outstanding),
+      collect: r.nextPaymentDate
+        ? asDate(r.nextPaymentDate)?.toLocaleDateString("he-IL") || ""
+        : r.nextPaymentNote || "",
+      note: r.nextPaymentNote && r.nextPaymentDate ? r.nextPaymentNote : "",
+    })),
+    totals: ["total", "paid", "debt"],
+  });
 });
 
 /**
  * GET /api/export/course/:id/roster.xlsx
  * Roster for a course. :id is either a Course _id, OR pass
  * ?courseField=...&cohortLabel=... to match by family + cohort.
- * Columns (Hebrew): שם הנרשם, ת.ז., נציגה, סטטוס תשלום.
  */
 export const exportCourseRoster = asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -214,19 +248,27 @@ export const exportCourseRoster = asyncHandler(async (req, res) => {
 
   const regs = await Registration.find(filter).sort({ studentName: 1 }).lean();
 
-  const rows = regs.map((r) => ({
-    "שם הנרשם": r.studentName || "",
-    "ת.ז.": r.idNumber || "",
-    נציגה: r.repName || "",
-    "סטטוס תשלום": statusLabel(r.paymentStatus),
-    "קובץ מקור": r.sourceFile || "",
-    "שורת מקור": r.sourceRow || "",
-  }));
-
   const baseName =
     course?.name || req.query.courseField || decodeURIComponent(id);
-  const fileName = `roster-${baseName}`;
-  return sendWorkbook(res, { rows, sheetName: "משתתפים", fileName });
+  return sendStyledWorkbook(res, `רשימת משתתפים - ${baseName}`, {
+    sheetName: "משתתפים",
+    title: `רשימת משתתפים — ${baseName}`,
+    subtitle: `הופק: ${stamp()} · ${regs.length} משתתפים`,
+    columns: [
+      { header: "שם הנרשם/ת", key: "name" },
+      { header: "ת.ז.", key: "idNumber" },
+      { header: "נציגה", key: "rep" },
+      { header: "סטטוס תשלום", key: "status", type: "status" },
+      { header: "תקנון", key: "takanon", type: "bool" },
+    ],
+    rows: regs.map((r) => ({
+      name: r.studentName || "",
+      idNumber: r.idNumber || "",
+      rep: r.repName || "",
+      status: statusLabel(r.paymentStatus),
+      takanon: yesNo(r.checklist?.signedTakanon),
+    })),
+  });
 });
 
 /**
@@ -256,29 +298,13 @@ export const exportByMonth = asyncHandler(async (req, res) => {
 
   const regs = await Registration.find(filter).sort({ dealDate: -1 }).lean();
 
-  const rows = regs.map((r) => ({
-    תאריך: fmtDate(r.dealDate),
-    "שם הנרשם": r.studentName || "",
-    "ת.ז.": r.idNumber || "",
-    קורס: r.courseRaw || r.courseField || "",
-    מחזור: r.cohortLabel || "",
-    נציגה: r.repName || "",
-    'סה"כ עסקה': money(r.totalAmount),
-    שולם: money(r.totalPaid),
-    יתרה: money(r.outstanding),
-    "סטטוס תשלום": statusLabel(r.paymentStatus),
-    "אופן תשלום": r.primaryPaymentMethod || "",
-    תקנון: yesNo(r.checklist?.signedTakanon),
-    הערות: r.notes || "",
-    "תאריך מקורי": r.dealDateRaw || "",
-    "קובץ מקור": r.sourceFile || "",
-    "גליון מקור": r.sourceSheet || "",
-    "שורת מקור": r.sourceRow || "",
-  }));
-
-  return sendWorkbook(res, {
-    rows,
+  const monthLabel = `${m[2]}/${m[1]}`;
+  return sendStyledWorkbook(res, `דוח חודשי ${m[1]}-${m[2]}`, {
     sheetName: `${m[1]}-${m[2]}`,
-    fileName: `registrations-${m[1]}-${m[2]}`,
+    title: `דוח רישומים חודשי — ${monthLabel}`,
+    subtitle: `כל העסקאות שנסגרו בחודש ${monthLabel} · הופק: ${stamp()} · ${regs.length} רשומות`,
+    columns: REG_COLUMNS,
+    rows: regs.map(regRow),
+    totals: ["total", "paid", "outstanding"],
   });
 });
