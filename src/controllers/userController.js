@@ -1,6 +1,25 @@
+import crypto from "crypto";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import User from "../models/User.js";
+
+/** שם משתמש חוקי: אותיות אנגליות/ספרות/נקודה/מקף, 2-24 תווים. */
+const USERNAME_RX = /^[a-z0-9._-]{2,24}$/;
+
+/** מנרמל ובודק שם משתמש; זורק שגיאת קלט ברורה. ריק => undefined. */
+async function normalizeUsername(raw, excludeId) {
+  const u = String(raw || "").trim().toLowerCase();
+  if (!u) return undefined;
+  if (!USERNAME_RX.test(u)) {
+    throw ApiError.badRequest("שם משתמש באנגלית בלבד: אותיות/ספרות/נקודה/מקף, 2-24 תווים");
+  }
+  const clash = await User.findOne({
+    username: u,
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  }).lean();
+  if (clash) throw ApiError.badRequest(`שם המשתמש "${u}" כבר תפוס`);
+  return u;
+}
 
 /**
  * userController - ניהול נציגות מכירה (reps) ומנהלים (managers).
@@ -74,13 +93,15 @@ export const getOne = asyncHandler(async (req, res) => {
  * שימוש ב-new User() + setPassword() + save(), והחזרה ללא passwordHash.
  */
 export const create = asyncHandler(async (req, res) => {
-  const { name, email, role, password, phone, commission, aliases } =
+  const { name, username, email, role, password, phone, commission, aliases } =
     req.body || {};
 
   if (!name || !String(name).trim())
     throw ApiError.badRequest("שם הוא שדה חובה");
-  if (!password || String(password).length < 4) {
-    throw ApiError.badRequest("נדרשת סיסמה באורך 4 תווים לפחות");
+  const uname = await normalizeUsername(username);
+  if (!uname) throw ApiError.badRequest("שם משתמש (באנגלית) הוא שדה חובה");
+  if (!password || String(password).length < 6) {
+    throw ApiError.badRequest("נדרשת סיסמה באורך 6 תווים לפחות");
   }
   if (role && !["manager", "rep"].includes(role)) {
     throw ApiError.badRequest("תפקיד לא תקין");
@@ -88,6 +109,7 @@ export const create = asyncHandler(async (req, res) => {
 
   const user = new User({
     name: String(name).trim(),
+    username: uname,
     email: email ? String(email).trim().toLowerCase() : undefined,
     role: role || "rep",
     phone: phone ? String(phone).trim() : undefined,
@@ -112,8 +134,13 @@ export const update = asyncHandler(async (req, res) => {
   const user = await User.findById(req.params.id).select("-passwordHash");
   if (!user) throw ApiError.notFound("המשתמש לא נמצא");
 
-  const { name, email, phone, active, role } = req.body || {};
+  const { name, username, email, phone, active, role } = req.body || {};
 
+  if (username !== undefined) {
+    const uname = await normalizeUsername(username, user._id);
+    if (!uname) throw ApiError.badRequest("שם משתמש (באנגלית) הוא שדה חובה");
+    user.username = uname;
+  }
   if (name !== undefined) user.name = String(name).trim();
   if (email !== undefined)
     user.email = email ? String(email).trim().toLowerCase() : undefined;
@@ -164,4 +191,44 @@ export const remove = asyncHandler(async (req, res) => {
   await user.save();
 
   res.json({ success: true, data: user });
+});
+
+/**
+ * POST /api/reps/:id/password-reset-link  (manager)
+ * מפיק קישור חד-פעמי להגדרת/איפוס סיסמה (בתוקף ל-3 ימים) עבור המשתמש.
+ * הרשאות: מנהל מפיק לנציגות; קישור למנהל/מנהל-על - רק מנהל-העל רשאי.
+ * מוחזר הטוקן הגולמי (נשמר רק hash); הקליינט מרכיב ממנו את כתובת העמוד.
+ */
+export const createPasswordResetLink = asyncHandler(async (req, res) => {
+  const target = await User.findById(req.params.id).select("+passwordReset");
+  if (!target) throw ApiError.notFound("המשתמש לא נמצא");
+  if (!target.active) throw ApiError.badRequest("לא ניתן להפיק קישור למשתמש לא פעיל");
+
+  // ההרשאה נקבעת לפי המשתמש האמיתי (impersonator אם קיים), לא לפי "צפייה בתור"
+  const actor = req.impersonator || req.user;
+  const actorIsSuper = actor?.superAdmin === true;
+  if ((target.superAdmin || target.role === "manager") && !actorIsSuper) {
+    throw ApiError.forbidden("רק מנהל-העל רשאי להפיק קישור איפוס למנהל");
+  }
+
+  const token = crypto.randomBytes(24).toString("base64url"); // 192 ביט - לא ניתן לניחוש
+  const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  target.passwordReset = {
+    tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
+    expiresAt,
+    createdAt: new Date(),
+    createdByName: actor?.name || "",
+  };
+  await target.save();
+
+  res.json({
+    success: true,
+    data: {
+      token,
+      expiresAt,
+      name: target.name,
+      username: target.username || "",
+      phone: target.phone || "",
+    },
+  });
 });

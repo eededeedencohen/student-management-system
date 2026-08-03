@@ -14,7 +14,8 @@ const loginEventSchema = new Schema(
     superAdmin: { type: Boolean, default: false },
     // 'login' = התחברות במסך הכניסה; 'resume' = חזרה לאפליקציה עם טוקן שמור
     // (הטוקן תקף 30 יום, ולכן רוב ה"כניסות" בפועל הן resume בלי מסך התחברות).
-    kind: { type: String, enum: ["login", "resume"], default: "login" },
+    // login = מסך התחברות; resume = חזרה עם טוקן שמור; password-reset = הגדרת סיסמה בקישור
+    kind: { type: String, enum: ["login", "resume", "password-reset"], default: "login" },
     at: { type: Date, default: Date.now, index: true },
     ip: { type: String },
     userAgent: { type: String },

@@ -22,11 +22,25 @@ const commissionSchema = new Schema(
   { _id: false }
 );
 
+/** קישור איפוס/הגדרת סיסמה חד-פעמי: נשמר רק ה-hash של הטוקן + תוקף. */
+const passwordResetSchema = new Schema(
+  {
+    tokenHash: { type: String }, // sha256 של הטוקן שבקישור
+    expiresAt: { type: Date },
+    createdAt: { type: Date },
+    createdByName: { type: String, trim: true }, // המנהל שהפיק את הקישור
+  },
+  { _id: false }
+);
+
 const userSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
+    // שם המשתמש להתחברות - השם באנגלית (eden, yakir, michal...), ייחודי
+    username: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
     email: { type: String, trim: true, lowercase: true, index: true },
     passwordHash: { type: String, select: false },
+    passwordReset: { type: passwordResetSchema, select: false },
     role: { type: String, enum: ['manager', 'rep'], default: 'rep', index: true },
     // super-admin may "view as" (impersonate) any user from within the app.
     superAdmin: { type: Boolean, default: false },

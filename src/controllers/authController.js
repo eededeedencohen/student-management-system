@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import User from "../models/User.js";
 import LoginEvent from "../models/LoginEvent.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -55,6 +56,7 @@ async function recordResumeThrottled(req, realUser) {
 const publicUser = (user) => ({
   _id: user._id,
   name: user.name,
+  username: user.username || "",
   email: user.email,
   role: user.role,
   superAdmin: user.superAdmin === true,
@@ -75,47 +77,48 @@ export const loginOptions = asyncHandler(async (req, res) => {
 });
 
 /**
- * POST /api/auth/login-as  (PUBLIC)
- * body: { userId }
- * Passwordless sign-in by picking a user (internal tool - no password step).
- * Returns a token + user, exactly like /login.
+ * POST /api/auth/login-as  (PUBLIC, RETIRED)
+ * הכניסה ללא סיסמה בוטלה - מאז מעבר המערכת לשם משתמש + סיסמה. הנקודה נשארת
+ * רק כדי שקליינטים ישנים (טאב פתוח עם גרסה קודמת) יקבלו הסבר ברור.
  */
-export const loginAs = asyncHandler(async (req, res) => {
-  const { userId } = req.body || {};
-  if (!userId) throw ApiError.badRequest("יש לבחור משתמש");
-  const user = await User.findById(userId);
-  if (!user || !user.active)
-    throw ApiError.unauthorized("המשתמש לא קיים או לא פעיל");
-
-  await recordLogin(req, user);
-  const token = signToken({ id: user._id, role: user.role });
-  res.json({ success: true, data: { token, user: publicUser(user) } });
+export const loginAs = asyncHandler(async () => {
+  throw ApiError.unauthorized(
+    "הכניסה ללא סיסמה בוטלה - יש לרענן את הדף ולהתחבר עם שם משתמש וסיסמה",
+  );
 });
 
 /**
  * POST /api/auth/login  (PUBLIC)
- * body: { email, password }
- * מאמת אימייל+סיסמה ומחזיר טוקן + פרטי משתמש.
+ * body: { username, password }  (username = השם באנגלית; אימייל מתקבל גם הוא)
+ * מאמת שם משתמש+סיסמה ומחזיר טוקן + פרטי משתמש.
  */
 export const login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    throw ApiError.badRequest("יש להזין אימייל וסיסמה");
+  const { username, email, password } = req.body || {};
+  const ident = String(username || email || "").toLowerCase().trim();
+  if (!ident || !password) {
+    throw ApiError.badRequest("יש להזין שם משתמש וסיסמה");
   }
 
   // passwordHash מוגדר select:false במודל - חובה לבקש אותו במפורש.
   const user = await User.findOne({
-    email: String(email).toLowerCase().trim(),
+    $or: [{ username: ident }, { email: ident }],
   }).select("+passwordHash");
 
   // אותו מסר שגיאה גם כשהמשתמש לא קיים וגם כשהסיסמה שגויה (לא לחשוף קיום משתמש).
   if (!user || !user.active) {
-    throw ApiError.unauthorized("אימייל או סיסמה שגויים");
+    throw ApiError.unauthorized("שם משתמש או סיסמה שגויים");
+  }
+
+  // משתמש קיים אך ללא סיסמה מוגדרת - הכוונה ברורה במקום כישלון סתמי
+  if (!user.passwordHash) {
+    throw ApiError.unauthorized(
+      "טרם הוגדרה סיסמה למשתמש זה - יש לבקש ממנהל קישור להגדרת סיסמה",
+    );
   }
 
   const ok = await user.verifyPassword(password);
   if (!ok) {
-    throw ApiError.unauthorized("אימייל או סיסמה שגויים");
+    throw ApiError.unauthorized("שם משתמש או סיסמה שגויים");
   }
 
   await recordLogin(req, user);
@@ -128,6 +131,60 @@ export const login = asyncHandler(async (req, res) => {
       user: publicUser(user),
     },
   });
+});
+
+/* ------------------------------------------------------------------ */
+/* קישורי איפוס/הגדרת סיסמה                                            */
+/* ------------------------------------------------------------------ */
+
+const RESET_LINK_TTL_MS = 3 * 24 * 60 * 60 * 1000; // הקישור בתוקף ל-3 ימים
+const hashToken = (t) => crypto.createHash("sha256").update(String(t)).digest("hex");
+
+/** מאתר משתמש לפי טוקן איפוס בתוקף; זורק שגיאה אחידה אם לא נמצא/פג. */
+async function findByResetToken(token) {
+  const t = String(token || "").trim();
+  if (t.length < 20) throw ApiError.notFound("הקישור אינו תקין או שפג תוקפו");
+  const user = await User.findOne({
+    "passwordReset.tokenHash": hashToken(t),
+    "passwordReset.expiresAt": { $gt: new Date() },
+    active: true,
+  }).select("+passwordReset +passwordHash");
+  if (!user) throw ApiError.notFound("הקישור אינו תקין או שפג תוקפו");
+  return user;
+}
+
+/**
+ * GET /api/auth/password-reset/:token  (PUBLIC)
+ * פרטי הקישור לתצוגה בעמוד האיפוס: למי הוא שייך ומתי פג.
+ */
+export const resetInfo = asyncHandler(async (req, res) => {
+  const user = await findByResetToken(req.params.token);
+  res.json({
+    success: true,
+    data: {
+      name: user.name,
+      username: user.username || "",
+      expiresAt: user.passwordReset.expiresAt,
+    },
+  });
+});
+
+/**
+ * POST /api/auth/password-reset/:token  (PUBLIC)
+ * body: { password }
+ * מגדיר סיסמה חדשה דרך הקישור ומוחק את הטוקן (חד-פעמי).
+ */
+export const resetPassword = asyncHandler(async (req, res) => {
+  const user = await findByResetToken(req.params.token);
+  const password = String(req.body?.password || "");
+  if (password.length < 6) {
+    throw ApiError.badRequest("הסיסמה חייבת להכיל לפחות 6 תווים");
+  }
+  await user.setPassword(password);
+  user.passwordReset = undefined; // הקישור נשרף עם השימוש
+  await user.save();
+  await recordLogin(req, user, "password-reset");
+  res.json({ success: true, data: { username: user.username || "", name: user.name } });
 });
 
 /**
@@ -176,6 +233,10 @@ export const changePassword = asyncHandler(async (req, res) => {
   // משתמש admin-token אינו משתמש אמיתי במסד - אין לו סיסמה לשנות.
   if (req.user?.isAdminToken || !req.user?._id) {
     throw ApiError.forbidden("לא ניתן לשנות סיסמה עבור משתמש זה");
+  }
+  // במצב "צפייה בתור" req.user הוא המשתמש המתחזה - אסור לשנות לו סיסמה בטעות.
+  if (req.impersonator) {
+    throw ApiError.forbidden('לא ניתן לשנות סיסמה במצב "צפייה בתור" - יש לחזור לזהות האמיתית');
   }
 
   // טוענים מחדש עם passwordHash (req.user נטען ללא השדה הזה).

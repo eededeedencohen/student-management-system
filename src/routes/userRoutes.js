@@ -15,5 +15,7 @@ router.post("/", requireManager, ctrl.create);
 router.put("/:id", requireManager, ctrl.update);
 router.put("/:id/commission", requireManager, ctrl.updateCommission);
 router.delete("/:id", requireManager, ctrl.remove);
+// קישור איפוס/הגדרת סיסמה - מנהל; קישור למנהל מפיק רק מנהל-העל (נאכף בבקרה)
+router.post("/:id/password-reset-link", requireManager, ctrl.createPasswordResetLink);
 
 export default router;
