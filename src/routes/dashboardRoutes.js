@@ -14,5 +14,6 @@ router.get('/reps', ctrl.reps);
 router.get('/upcoming', ctrl.upcoming); // הכנסות מתוזמנות לחודשים הקרובים
 router.get('/upcoming-detail', ctrl.upcomingDetail); // פירוט התשלומים המתוזמנים של חודש
 router.get('/by-course', ctrl.byCourse); // מה נמכר בתקופה, לפי קורס
+router.get('/payment-tasks', ctrl.paymentTasks); // תזכורות גבייה לנציגה (אימות/מעקב/הופסק)
 
 export default router;

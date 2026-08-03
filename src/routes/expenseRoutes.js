@@ -6,8 +6,9 @@ const router = express.Router();
 
 router.use(protect); // כל המסלולים דורשים אימות
 
-// צפייה פתוחה לכל משתמש מאומת
-router.get("/", ctrl.list);
+// הוצאות = נתוני הנהלה (סכומים, קטגוריות) — גם הצפייה למנהל בלבד.
+// עמוד התזרים שמשתמש בהן הוא ממילא managerOnly בקליינט.
+router.get("/", requireManager, ctrl.list);
 
 // יצירה/עדכון/מחיקה - למנהל בלבד
 router.post("/", requireManager, ctrl.create);

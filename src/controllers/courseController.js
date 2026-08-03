@@ -106,6 +106,16 @@ async function computeEnrollment(req) {
  * GET /api/courses
  * סינון אופציונלי: ?field, ?status, ?weekday. מיון לפי startDate עולה.
  */
+/**
+ * תיחום כספי לנציגה: סכומי הקורס (מכירות/נגבה/יתרה) מחושבים עבורה רק מהעסקאות
+ * שלה — היא לא מקבלת אגרגטים של כלל החברה (מהם אפשר לגזור מכירות של קולגות).
+ * מנהלים מקבלים את הסכום המלא. מוחל על list / gantt / get.
+ */
+const repMoneyDeals = (req, dealsOfCourse) =>
+  req.user?.role === "rep"
+    ? dealsOfCourse.filter((d) => String(d.rep) === String(req.user._id))
+    : dealsOfCourse;
+
 export const list = asyncHandler(async (req, res) => {
   const { field, status, weekday } = req.query;
   const filter = {};
@@ -129,7 +139,7 @@ export const list = asyncHandler(async (req, res) => {
         ...c,
         cohortId: cohortBySource.get(String(c._id)) || null,
         enrolledCount: dealsOfCourse.length,
-        ...courseMoney(dealsOfCourse),
+        ...courseMoney(repMoneyDeals(req, dealsOfCourse)),
       };
     })
     .filter((c) => courseVisibleSince(req, c, c.enrolledCount));
@@ -167,7 +177,7 @@ export const gantt = asyncHandler(async (req, res) => {
         weekday: c.weekday,
         status: c.status,
         registrationsCount: dealsOfCourse.length,
-        ...courseMoney(dealsOfCourse),
+        ...courseMoney(repMoneyDeals(req, dealsOfCourse)),
       };
     })
     .filter((c) => courseVisibleSince(req, c, c.registrationsCount));
@@ -210,7 +220,7 @@ export const get = asyncHandler(async (req, res) => {
     data: {
       course,
       roster: visibleRoster,
-      money: courseMoney(roster),
+      money: courseMoney(repMoneyDeals(req, roster)),
       enrolledCount: roster.length,
     },
   });

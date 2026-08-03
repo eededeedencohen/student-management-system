@@ -480,6 +480,8 @@ export const updateStudent = asyncHandler(async (req, res) => {
     'mobile', 'city', 'street', 'houseNumber', 'apartment', 'zip', 'addressNotes',
   ];
   for (const f of FIELDS) if (b[f] !== undefined) student[f] = cleanStr(b[f]);
+  const prevGender = student.gender;
+  const prevTitle = student.title;
   // gender/title הם enum במודל — מחרוזת ריקה נכשלת בוולידציה, ולכן מציבים רק ערך אמיתי
   for (const f of ['gender', 'title']) {
     const v = cleanStr(b[f]);
@@ -487,8 +489,18 @@ export const updateStudent = asyncHandler(async (req, res) => {
   }
   if (id) student.realIdNumber = id;
   if (email) student.email = email;
-  // גבר תמיד "Mr." — שומרים על אותו כלל כמו בטופס החיצוני
-  if (student.gender === 'male') student.title = 'Mr.';
+  // עקביות מין↔פנייה: השדה שהשתנה בבקשה מוביל (מין גובר כששניהם השתנו).
+  // גבר ⇒ תמיד Mr.; אישה עם Mr. ישן ⇒ הפנייה מתרוקנת (בוחרים Ms./Mrs. מחדש);
+  // Mr. ⇒ גבר; Ms./Mrs. ⇒ אישה. כך לא נשמרת סתירה בשום צירוף.
+  const genderChanged = student.gender !== prevGender;
+  const titleChanged = student.title !== prevTitle;
+  if (genderChanged || !titleChanged) {
+    if (student.gender === 'male') student.title = 'Mr.';
+    else if (student.gender === 'female' && student.title === 'Mr.') student.title = undefined;
+  } else {
+    if (student.title === 'Mr.') student.gender = 'male';
+    else if (['Ms.', 'Mrs.'].includes(student.title)) student.gender = 'female';
+  }
   const first = cleanStr(student.firstName);
   const last = cleanStr(student.lastName);
   if (first || last) student.fullName = [first, last].filter(Boolean).join(' ');
@@ -511,6 +523,8 @@ export const updatePayments = asyncHandler(async (req, res) => {
   if (raw.length === 0) throw ApiError.badRequest('יש להזין לפחות תשלום אחד');
   if (raw.length > 60) throw ApiError.badRequest('יותר מדי תשלומים');
 
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
   const payments = raw.map((p, i) => {
     const amount = round2(p.amount);
     if (!(amount > 0)) throw ApiError.badRequest(`סכום לא תקין בתשלום ${i + 1}`);
@@ -520,6 +534,10 @@ export const updatePayments = asyncHandler(async (req, res) => {
     const dueDate = new Date(p.dueDate);
     if (Number.isNaN(dueDate.getTime())) throw ApiError.badRequest(`תאריך לא תקין בתשלום ${i + 1}`);
     const paid = Boolean(p.paid);
+    // סתירה: אי אפשר לסמן "שולם" על תשלום שמועדו עוד לא הגיע
+    if (paid && dueDate > endOfToday) {
+      throw ApiError.badRequest(`תשלום ${i + 1} סומן כשולם אך נושא תאריך עתידי`);
+    }
     return {
       type: PAY_TYPES.includes(p.type) ? p.type : 'one_time',
       amount,

@@ -518,3 +518,153 @@ export const reps = asyncHandler(async (req, res) => {
 
   res.json({ success: true, data });
 });
+
+/**
+ * GET /api/dashboard/payment-tasks
+ * "משימות גבייה" — התזכורות של הנציגה בדשבורד.
+ *
+ * הרקע: תשלום מתוזמן שהמועד שלו עבר מסומן כנגבה אוטומטית (utils/ernAutoConfirm.js),
+ * כלומר המערכת מניחה שהכסף נכנס. לכן התזכורת החשובה היא לוודא שזה באמת קרה —
+ * ואם לא, לבטל את הסימון או לרשום "הופסק". שלוש קבוצות:
+ *
+ *   verify  — אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
+ *   due     — אמורים להיכנס עכשיו/בקרוב: לעקוב
+ *   stopped — מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
+ */
+export const paymentTasks = asyncHandler(async (req, res) => {
+  const repId = resolveRepId(req);
+  const now = nowFromReq(req);
+  const daysBack = Math.min(Math.max(parseInt(req.query.daysBack, 10) || 30, 1), 120);
+  const daysAhead = Math.min(Math.max(parseInt(req.query.daysAhead, 10) || 14, 1), 90);
+  const since = new Date(now.getTime() - daysBack * 864e5);
+  const until = new Date(now.getTime() + daysAhead * 864e5);
+
+  const match = { recordType: "registration" };
+  if (repId) match.rep = repId;
+  applySince(req, match); // מוד "מ-2026 בלבד"
+
+  const rows = await Registration.aggregate([
+    { $match: match },
+    { $unwind: { path: "$payments", includeArrayIndex: "payIndex" } },
+    // כל התשלומים שמועדם בטווח הרלוונטי (אחורה לאימות, קדימה למעקב)
+    { $match: { "payments.dueDate": { $gte: since, $lte: until } } },
+    {
+      $project: {
+        paymentId: "$payments._id",
+        student: 1,
+        studentName: 1,
+        courseRaw: 1,
+        courseField: 1,
+        cohortLabel: 1,
+        repName: 1,
+        amount: "$payments.amount",
+        dueDate: "$payments.dueDate",
+        paid: "$payments.paid",
+        method: "$payments.method",
+        methodCategory: "$payments.methodCategory",
+        note: "$payments.note",
+        confirmedByName: "$payments.confirmedByName",
+        confirmedAt: "$payments.confirmedAt",
+      },
+    },
+    { $sort: { dueDate: 1 } },
+  ]);
+
+  // סימון אוטומטי מזוהה לפי החותם שנרשם ב-ernAutoConfirm
+  const isAuto = (r) => /^אוטומטי/.test(r.confirmedByName || "");
+  const base = (r) => ({
+    dealId: String(r._id),
+    paymentId: r.paymentId ? String(r.paymentId) : null,
+    student: r.student ? String(r.student) : null,
+    studentName: r.studentName || "",
+    courseName: r.courseRaw || r.courseField || "",
+    cohortLabel: r.cohortLabel || "",
+    repName: r.repName || "",
+    amount: round2(r.amount || 0),
+    dueDate: r.dueDate,
+    method: r.methodCategory || r.method || "",
+    note: r.note || "",
+  });
+
+  const verify = [];
+  const due = [];
+  const stopped = [];
+  for (const r of rows) {
+    const past = new Date(r.dueDate) <= now;
+    if (r.paid) {
+      // רק אישורים אוטומטיים דורשים אימות; מה שנציגה כבר אישרה ידנית — סגור
+      if (isAuto(r)) verify.push({ ...base(r), confirmedAt: r.confirmedAt, auto: true });
+    } else if (past) {
+      stopped.push({ ...base(r), overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5) });
+    } else {
+      due.push(base(r));
+    }
+  }
+
+  // תוכניות v1 (installmentPlan) לא מאושרות אוטומטית לעולם — תשלום שמועדו עבר
+  // ועדיין 'pending' ממתין לאישור ידני של הנציגה.
+  const planRows = await Registration.aggregate([
+    { $match: { ...match, "installmentPlan.0": { $exists: true } } },
+    { $unwind: "$installmentPlan" },
+    {
+      $match: {
+        "installmentPlan.status": "pending",
+        "installmentPlan.dueDate": { $gte: since, $lte: until },
+      },
+    },
+    {
+      $project: {
+        student: 1,
+        studentName: 1,
+        courseRaw: 1,
+        courseField: 1,
+        cohortLabel: 1,
+        repName: 1,
+        index: "$installmentPlan.index",
+        label: "$installmentPlan.label",
+        amount: "$installmentPlan.amount",
+        dueDate: "$installmentPlan.dueDate",
+        method: "$installmentPlan.method",
+      },
+    },
+    { $sort: { dueDate: 1 } },
+  ]);
+  const confirm = planRows
+    .filter((r) => new Date(r.dueDate) <= now)
+    .map((r) => ({
+      dealId: String(r._id),
+      installmentIndex: r.index,
+      label: r.label || "",
+      student: r.student ? String(r.student) : null,
+      studentName: r.studentName || "",
+      courseName: r.courseRaw || r.courseField || "",
+      cohortLabel: r.cohortLabel || "",
+      amount: round2(r.amount || 0),
+      dueDate: r.dueDate,
+      method: r.method || "",
+      overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5),
+    }));
+
+  const sum = (list) => round2(list.reduce((a, x) => a + (x.amount || 0), 0));
+  res.json({
+    success: true,
+    data: {
+      verify,
+      confirm,
+      due,
+      stopped,
+      totals: {
+        verify: verify.length,
+        confirm: confirm.length,
+        due: due.length,
+        stopped: stopped.length,
+        open: verify.length + confirm.length + stopped.length, // מה שדורש פעולה
+        verifyAmount: sum(verify),
+        confirmAmount: sum(confirm),
+        dueAmount: sum(due),
+        stoppedAmount: sum(stopped),
+      },
+      window: { since, until, now },
+    },
+  });
+});

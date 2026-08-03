@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Student from "../models/Student.js";
 import Registration from "../models/Registration.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -70,25 +71,30 @@ export const list = asyncHandler(async (req, res) => {
     {
       // Only true sales count toward the money totals - collection follow-ups are
       // already folded into their parent deal (counting them would double-count).
+      // נציגה: רק העסקאות שלה נספרות — הסכומים שהיא רואה הם הכסף שלה בלבד.
       $addFields: {
         deals: {
           $filter: {
             input: "$regs",
             as: "r",
-            cond: sinceOf(req)
-              ? {
-                  $and: [
-                    { $eq: ["$$r.recordType", "registration"] },
-                    { $gte: ["$$r.dealDate", sinceOf(req)] },
-                  ],
-                }
-              : { $eq: ["$$r.recordType", "registration"] },
+            cond: {
+              $and: [
+                { $eq: ["$$r.recordType", "registration"] },
+                ...(sinceOf(req) ? [{ $gte: ["$$r.dealDate", sinceOf(req)] }] : []),
+                ...(req.scopeRepId
+                  ? [{ $eq: ["$$r.rep", new mongoose.Types.ObjectId(req.scopeRepId)] }]
+                  : []),
+              ],
+            },
           },
         },
       },
     },
-    // מוד "מ-2026 בלבד": סטודנט בלי אף עסקת 2026 לא קיים מבחינת האפליקציה - מסונן החוצה
-    ...(sinceOf(req) ? [{ $match: { "deals.0": { $exists: true } } }] : []),
+    // מוד "מ-2026 בלבד": סטודנט בלי אף עסקת 2026 לא קיים מבחינת האפליקציה - מסונן החוצה.
+    // נציגה: תלמיד/ה בלי אף עסקה שלה לא מוצג/ת לה כלל.
+    ...(sinceOf(req) || req.scopeRepId
+      ? [{ $match: { "deals.0": { $exists: true } } }]
+      : []),
     {
       $addFields: {
         totalPaid: { $sum: "$deals.totalPaid" },
@@ -190,7 +196,18 @@ export const getOne = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.params.id);
   if (!student) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
 
+  // נציגה: גישה רק לתלמיד/ה שיש לה עסקה איתו/ה, ורואה רק את העסקאות שלה.
+  // 404 (ולא 403) — כדי לא לאשר לנציגה שהתלמיד/ה בכלל קיים/ת במערכת.
+  if (req.scopeRepId) {
+    const owns = await Registration.exists({
+      student: student._id,
+      rep: req.scopeRepId,
+    });
+    if (!owns) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
+  }
+
   const regFilter = { student: student._id };
+  if (req.scopeRepId) regFilter.rep = req.scopeRepId;
   if (sinceOf(req)) regFilter.dealDate = { $gte: sinceOf(req) }; // מוד "מ-2026 בלבד"
   const registrations = await Registration.find(regFilter).sort({
     dealDate: -1,
@@ -198,7 +215,10 @@ export const getOne = asyncHandler(async (req, res) => {
   // הספירה האמיתית ללא סינון תקופה - המחיקה המדורגת מוחקת את כולן,
   // ולכן אזהרת המחיקה חייבת להציג את המספר המלא ולא את המסונן
   const regsTotal = sinceOf(req)
-    ? await Registration.countDocuments({ student: student._id })
+    ? await Registration.countDocuments({
+        student: student._id,
+        ...(req.scopeRepId ? { rep: req.scopeRepId } : {}),
+      })
     : registrations.length;
 
   // לאילו עסקאות שמור עותק PDF חתום — מציג את כפתור ההורדה רק כשבאמת יש מה להוריד
@@ -288,11 +308,36 @@ export const update = asyncHandler(async (req, res) => {
     throw ApiError.badRequest("שם מלא לא יכול להיות ריק");
   }
 
-  const student = await Student.findByIdAndUpdate(req.params.id, updates, {
-    new: true,
-    runValidators: true,
-  });
+  // נציגה עורכת רק תלמיד/ה שיש לה עסקה איתו/ה (אותו כלל כמו הצפייה)
+  if (req.scopeRepId) {
+    const owns = await Registration.exists({
+      student: req.params.id,
+      rep: req.scopeRepId,
+    });
+    if (!owns) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
+  }
+
+  const student = await Student.findById(req.params.id);
   if (!student) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
+
+  const prevGender = student.gender;
+  const prevTitle = student.title;
+  Object.assign(student, updates);
+
+  // עקביות מין↔פנייה (אותו כלל כמו בעריכת נתונים ובטופס החיצוני): השדה שהשתנה
+  // מוביל — גבר ⇒ Mr.; אישה עם Mr. ⇒ הפנייה מתרוקנת; Mr. ⇒ גבר; Ms./Mrs. ⇒ אישה.
+  const genderChanged = (student.gender || null) !== (prevGender || null);
+  const titleChanged = (student.title || null) !== (prevTitle || null);
+  if (genderChanged || !titleChanged) {
+    if (student.gender === "male") student.title = "Mr.";
+    else if (student.gender === "female" && student.title === "Mr.")
+      student.title = null;
+  } else {
+    if (student.title === "Mr.") student.gender = "male";
+    else if (["Ms.", "Mrs."].includes(student.title)) student.gender = "female";
+  }
+
+  await student.save();
 
   res.json({ success: true, data: student });
 });

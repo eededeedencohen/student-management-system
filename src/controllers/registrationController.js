@@ -484,6 +484,195 @@ export const update = asyncHandler(async (req, res) => {
 });
 
 /**
+ * PUT /api/registrations/:id/payment-plan  (v2)
+ * החלפה מלאה של תוכנית התשלומים של עסקה קיימת, באותם חוקים כמו יצירת עסקה:
+ * סך כל התשלומים חייב להשתוות למחיר העסקה (בניכוי הנחה/מחילה שנרשמה כ-writeOff).
+ * תשלום שכבר סומן כשולם נעול — סכום/אמצעי/תאריך אינם ניתנים לשינוי, ומחיקתו
+ * דורשת אישור מפורש (confirmRemovePaid) — כך כסף שנגבה לא "נעלם" בטעות.
+ */
+export const updatePaymentPlan = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אפשר לערוך תשלומים רק בעסקאות שלך");
+  }
+  if (reg.schemaVersion !== 2) {
+    throw ApiError.badRequest(
+      "עריכת תוכנית תשלומים זמינה לעסקאות מהפורמט החדש בלבד — עסקה ישנה משלימים קודם בעמוד עריכת הנתונים",
+    );
+  }
+
+  const METHODS = [
+    "credit",
+    "ern",
+    "cash",
+    "transfer",
+    "financing",
+    "combined",
+    "other",
+  ];
+  const TYPES = ["advance", "installment", "one_time"];
+  const incoming = Array.isArray(req.body?.payments) ? req.body.payments : null;
+  if (!incoming || incoming.length === 0) {
+    throw ApiError.badRequest(
+      "נדרשת רשימת תשלומים — כל עוד העסקה קיימת התוכנית חייבת לכסות את מלוא הסכום",
+    );
+  }
+
+  // מחיר העסקה מקובע: עריכה משנה איך משלמים, לעולם לא כמה משלמים
+  const priceBase =
+    reg.dealPrice > 0 ? reg.dealPrice : Number(reg.totalAmount) || 0;
+  const writeOff = Number(reg.writeOff) || 0;
+  const target = Math.max(priceBase - writeOff, 0);
+
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  const uid =
+    req.user?._id && req.user._id !== "admin-token" ? req.user._id : undefined;
+  const uname = req.user?.name || "";
+  const dayOf = (d) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+
+  const existingById = new Map(
+    (reg.payments || []).map((p) => [String(p._id), p]),
+  );
+  const seenIds = new Set();
+  const rows = [];
+
+  incoming.forEach((p, i) => {
+    const rowNo = i + 1;
+    const amount = parseNumber(p.amount);
+    if (!(amount > 0))
+      throw ApiError.badRequest(`שורה ${rowNo}: סכום התשלום חייב להיות חיובי`);
+    const method = METHODS.includes(p.method) ? p.method : null;
+    if (!method)
+      throw ApiError.badRequest(`שורה ${rowNo}: יש לבחור אמצעי תשלום`);
+    const dueDate = p.dueDate ? new Date(p.dueDate) : null;
+    if (!dueDate || Number.isNaN(+dueDate))
+      throw ApiError.badRequest(`שורה ${rowNo}: יש לקבוע תאריך לתשלום`);
+    const paid = Boolean(p.paid);
+    if (paid && dueDate > endOfToday) {
+      throw ApiError.badRequest(
+        `שורה ${rowNo}: תשלום שסומן כשולם לא יכול לשאת תאריך עתידי`,
+      );
+    }
+    const type = TYPES.includes(p.type) ? p.type : "one_time";
+    const instNum = parseInt(p.installments, 10);
+    const installments =
+      Number.isInteger(instNum) && instNum >= 1
+        ? Math.min(instNum, 60)
+        : undefined;
+    const note = cleanStr(p.note) || undefined;
+
+    const prev = p._id ? existingById.get(String(p._id)) : null;
+    if (p._id && !prev) {
+      throw ApiError.badRequest(
+        `שורה ${rowNo}: התשלום המקורי כבר לא קיים בעסקה — רענן את העמוד ונסה שוב`,
+      );
+    }
+    if (prev) seenIds.add(String(prev._id));
+
+    if (prev && prev.paid && paid) {
+      // תשלום ששולם: כשהערכים לא השתנו נשמר האישור המקורי (מי אישר ומתי).
+      // שינוי סכום/אמצעי/תאריך אפשרי רק אחרי פתיחת הנעילה בממשק — ואז האישור
+      // נחתם מחדש על שם העורך הנוכחי, כדי שתמיד יהיה ברור מי ערב לכסף הזה.
+      const sameAmount = Math.abs((prev.amount || 0) - amount) < 0.01;
+      const sameMethod = (prev.method || "") === method;
+      const sameDate = dayOf(prev.dueDate) === dayOf(dueDate);
+      const untouched = sameAmount && sameMethod && sameDate;
+      rows.push({
+        _id: prev._id,
+        type,
+        amount,
+        method,
+        methodCategory: method,
+        dueDate,
+        paid: true,
+        confirmedBy: untouched ? prev.confirmedBy : uid,
+        confirmedByName: untouched ? prev.confirmedByName : uname,
+        confirmedAt: untouched ? prev.confirmedAt : new Date(),
+        installments: installments ?? prev.installments,
+        date: prev.date,
+        dateRaw: prev.dateRaw,
+        kind: prev.kind,
+        source: prev.source,
+        note: note ?? prev.note,
+      });
+      return;
+    }
+
+    rows.push({
+      ...(prev
+        ? {
+            _id: prev._id,
+            date: prev.date,
+            dateRaw: prev.dateRaw,
+            kind: prev.kind,
+            source: prev.source,
+          }
+        : {}),
+      type,
+      amount,
+      method,
+      methodCategory: method,
+      dueDate,
+      paid,
+      installments,
+      note,
+      // תשלום שהפך לשולם בעריכה זו נחתם על שם העורך; ביטול סימון מנקה את האישור
+      confirmedBy: paid ? uid : undefined,
+      confirmedByName: paid ? uname : undefined,
+      confirmedAt: paid ? new Date() : undefined,
+    });
+  });
+
+  const removedPaid = (reg.payments || []).filter(
+    (p) => p.paid && !seenIds.has(String(p._id)),
+  );
+  if (removedPaid.length > 0 && req.body?.confirmRemovePaid !== true) {
+    const total = removedPaid.reduce((s, p) => s + (p.amount || 0), 0);
+    throw ApiError.badRequest(
+      `הרשימה מוחקת ${removedPaid.length} תשלומים שכבר סומנו כשולמו (${Math.round(total).toLocaleString("he-IL")} ₪) — נדרש אישור מפורש למחיקה`,
+    );
+  }
+
+  const sum = rows.reduce((s, r) => s + r.amount, 0);
+  // עסקה נדירה בלי מחיר מוגדר: התוכנית הראשונה שנשמרת קובעת אותו
+  const effTarget = target > 0 ? target : sum;
+  if (Math.abs(sum - effTarget) > 0.5) {
+    throw ApiError.badRequest(
+      `סך התשלומים (${Math.round(sum).toLocaleString("he-IL")} ₪) חייב להשתוות לסכום העסקה (${Math.round(effTarget).toLocaleString("he-IL")} ₪)` +
+        (writeOff > 0
+          ? ` — המחיר בניכוי הנחה/מחילה של ${Math.round(writeOff).toLocaleString("he-IL")} ₪`
+          : ""),
+    );
+  }
+
+  reg.payments = rows;
+  // קיבוע מחיר מפורש: מעכשיו recompute לא ייגזר מהתשלומים ולא יזוז בעריכות הבאות
+  if (!(reg.dealPrice > 0)) reg.dealPrice = priceBase > 0 ? priceBase : sum;
+
+  // אמצעי דומיננטי לתזרים (כמו ביצירת עסקה)
+  const catCount = {};
+  for (const r of rows) catCount[r.method] = (catCount[r.method] || 0) + 1;
+  const dominant = Object.entries(catCount).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (dominant) reg.paymentCategory = dominant;
+
+  // תיעוד ביומן ההערות של העסקה: מי שינה את התוכנית, מתי ולְמה
+  reg.noteEntries = reg.noteEntries || [];
+  reg.noteEntries.push({
+    text: `תוכנית התשלומים עודכנה: ${rows.length} תשלומים בסך ${Math.round(sum).toLocaleString("he-IL")} ₪`,
+    date: new Date(),
+    by: uid,
+    byName: uname,
+  });
+
+  reg.recompute();
+  await reg.save();
+
+  res.json({ success: true, data: reg });
+});
+
+/**
  * POST /api/registrations/:id/payments
  * Body { amount, method, date, kind, note }. Push payment, recompute(), save.
  */

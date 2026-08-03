@@ -18,6 +18,7 @@ router.post("/", ctrl.create);
 router.put("/:id", ctrl.update);
 
 // money + checklist sub-actions
+router.put("/:id/payment-plan", ctrl.updatePaymentPlan); // עריכת תוכנית תשלומים מלאה (v2, סכום מאוזן חובה)
 router.post("/:id/payments", ctrl.addPayment);
 router.patch("/:id/checklist", ctrl.updateChecklist);
 
