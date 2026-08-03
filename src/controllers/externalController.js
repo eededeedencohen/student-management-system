@@ -4,6 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import Registration from "../models/Registration.js";
 import Student from "../models/Student.js";
 import Course from "../models/Course.js";
+import CourseCohort from "../models/CourseCohort.js";
 import User from "../models/User.js";
 import ContractPdf from "../models/ContractPdf.js";
 import { sendOneEmail } from "../utils/mailer.js";
@@ -28,27 +29,55 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /* GET /api/public/form-options                                        */
 /* ------------------------------------------------------------------ */
 
-/** הנציגות הפעילות + הקורסים הפתוחים (שם ומחיר בלבד) - מה שהטופס צריך ותו לא. */
+/**
+ * קורס NLP פרקטישינר — התעודה הבינלאומית מונפקת באנגלית, ולכן ההרשמה אליו
+ * מחייבת שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs). הזיהוי לפי שם הקורס,
+ * עמיד לכתיב מלא/חסר (פרקטישינר/פרקטישינייר) ולשם באנגלית.
+ */
+const requiresEnglishDetails = (courseName = "") =>
+  String(courseName).replace(/י/g, "").includes("פרקטשנר") ||
+  /practitioner/i.test(String(courseName));
+
+/**
+ * הנציגות הפעילות + המחזורים שבהרשמה פתוחה - מה שהטופס צריך ותו לא.
+ * הרשימה מגיעה ממערכת המחזורים (CourseCohort), לא מרשומות האקסל הישנות:
+ * רק מחזור שהוגדר/נערך בעמוד הקטלוג וסומן "הרשמה פתוחה" מוצע בטופס.
+ */
 export const formOptions = asyncHandler(async (req, res) => {
-  const [reps, courses] = await Promise.all([
+  const [reps, cohorts] = await Promise.all([
     User.find({ role: "rep", active: true }).select("name").sort({ name: 1 }).lean(),
-    Course.find({ status: { $in: ["פעיל", "פתוח להרשמה"] } })
-      .select("name field cohortLabel price startDate")
-      .sort({ startDate: 1 })
+    CourseCohort.find({ registrationOpen: true })
+      .populate("catalogCourse", "name price")
       .lean(),
   ]);
+  const courses = cohorts
+    .filter((c) => c.catalogCourse) // מחזור יתום ללא קורס קטלוגי — אין מה להציג
+    .map((c) => {
+      const sessions = [...(c.sessions || [])].sort(
+        (a, b) => new Date(a.date) - new Date(b.date),
+      );
+      return {
+        _id: String(c._id), // מזהה המחזור — הטופס שולח אותו כ-course ביצירת העסקה
+        name: c.catalogCourse.name,
+        cohortLabel: c.label || "",
+        price: Number(c.catalogCourse.price) || 0,
+        startDate: sessions[0]?.date || null,
+        deliveryMode: c.deliveryMode || "", // zoom / frontal / hybrid ("" = לא הוגדר)
+        requiresEnglish: requiresEnglishDetails(c.catalogCourse.name),
+      };
+    })
+    .sort((a, b) => {
+      // מתחילים בקרוב — קודם; מחזורים בלי מפגשים — בסוף, לפי שם
+      if (a.startDate && b.startDate) return new Date(a.startDate) - new Date(b.startDate);
+      if (a.startDate) return -1;
+      if (b.startDate) return 1;
+      return a.name.localeCompare(b.name, "he");
+    });
   res.json({
     success: true,
     data: {
       reps: reps.map((r) => ({ _id: String(r._id), name: r.name })),
-      courses: courses.map((c) => ({
-        _id: String(c._id),
-        name: c.name,
-        field: c.field || "",
-        cohortLabel: c.cohortLabel || "",
-        price: Number(c.price) || 0,
-        startDate: c.startDate || null,
-      })),
+      courses,
     },
   });
 });
@@ -95,9 +124,10 @@ export const createDeal = asyncHandler(async (req, res) => {
     throw ApiError.badRequest("מספר תעודת הזהות אינו תקין");
   const gender = b.gender === "male" || b.gender === "female" ? b.gender : null;
   if (!gender) throw ApiError.badRequest("יש לבחור מין");
+  // פנייה: גבר תמיד .Mr; אישה בוחרת .Ms/.Mrs. לא חובה — אלא בקורס פרקטישינר
+  // (נבדק בהמשך מול הקורס שנבחר), כי שם התעודה באנגלית מחייבת אותה.
   const title =
     gender === "male" ? "Mr." : ["Ms.", "Mrs."].includes(b.title) ? b.title : null;
-  if (!title) throw ApiError.badRequest("יש לבחור פנייה (Ms./Mrs.)");
   const phone = cleanStr(b.phone).replace(/[^\d+]/g, "");
   if (phone.replace(/\D/g, "").length < 9)
     throw ApiError.badRequest("מספר טלפון אינו תקין");
@@ -110,14 +140,46 @@ export const createDeal = asyncHandler(async (req, res) => {
   if (!city || !street || !houseNumber)
     throw ApiError.badRequest("כתובת מגורים (עיר, רחוב, מספר) היא שדה חובה");
 
-  // --- קורס ומחיר ---
-  const course = await Course.findById(b.course).select(
-    "name field cohortLabel price",
-  );
-  if (!course) throw ApiError.badRequest("יש לבחור קורס");
+  // --- קורס: מחזור מהמערכת החדשה, חייב להיות בהרשמה פתוחה ---
+  const cohort = await CourseCohort.findById(b.course)
+    .populate("catalogCourse", "name price")
+    .lean();
+  if (!cohort || !cohort.catalogCourse) throw ApiError.badRequest("יש לבחור קורס מהרשימה");
+  if (!cohort.registrationOpen) {
+    throw ApiError.badRequest("ההרשמה למחזור הזה סגורה - יש לבחור מחזור אחר");
+  }
+
+  // NLP פרקטישינר: התעודה מונפקת באנגלית — שם באנגלית ופנייה הם חובה
+  if (requiresEnglishDetails(cohort.catalogCourse.name) && (!firstNameEn || !lastNameEn || !title)) {
+    throw ApiError.badRequest(
+      "לקורס NLP פרקטישינר חובה למלא שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs) - התעודה מונפקת באנגלית",
+    );
+  }
+
+  // אופן השתתפות: מחזור "לפי בחירה" (hybrid) מחייב את בחירת הנרשם/ת בין
+  // זום לפרונטלי; מחזור עם אופן קבוע יורש אותו אוטומטית.
+  let deliveryMode = ["zoom", "frontal"].includes(cohort.deliveryMode)
+    ? cohort.deliveryMode
+    : null;
+  if (cohort.deliveryMode === "hybrid") {
+    const pick = cleanStr(b.deliveryChoice);
+    if (!["zoom", "frontal"].includes(pick)) {
+      throw ApiError.badRequest("יש לבחור אופן השתתפות - זום או פרונטלי");
+    }
+    deliveryMode = pick;
+  }
+
+  // רשומת ה-Course הישנה המקושרת (mirror/רשומת אקסל) — הדוחות והעמוד הראשי רצים עליה
+  const legacyCourse = cohort.sourceCourse
+    ? await Course.findById(cohort.sourceCourse).select("name field cohortLabel").lean()
+    : null;
+  const courseName =
+    legacyCourse?.name ||
+    `${cohort.catalogCourse.name}${cohort.label ? ` ${cohort.label}` : ""}`;
+
   const finalPrice = round2(b.finalPrice);
   if (!(finalPrice > 0)) throw ApiError.badRequest("מחיר העסקה אינו תקין");
-  const listPrice = Number(course.price) || 0;
+  const listPrice = Number(cohort.catalogCourse.price) || 0;
   const discountPercent =
     listPrice > 0 ? round2(((listPrice - finalPrice) / listPrice) * 100) : 0;
 
@@ -172,7 +234,7 @@ export const createDeal = asyncHandler(async (req, res) => {
       idNumber: String((top?.studentNumber || 0) + 1), // ת.ז. סינתטית עוקבת (כמו בייבוא)
       realIdNumber: idNumber,
       gender,
-      title,
+      title: title || undefined,
       mobile: phone,
       email,
       city,
@@ -194,7 +256,8 @@ export const createDeal = asyncHandler(async (req, res) => {
     // כדי שהחוזה ינוסח לפי מה שסומן בעסקה הזו.
     if (!student.realIdNumber) student.realIdNumber = idNumber;
     student.gender = gender;
-    student.title = title;
+    if (title) student.title = title;
+    else if (gender === "female" && student.title === "Mr.") student.title = undefined; // אישה לא נשארת .Mr
     if (!student.mobile) student.mobile = phone;
     if (!student.email) student.email = email;
     if (!student.city) student.city = city;
@@ -214,16 +277,19 @@ export const createDeal = asyncHandler(async (req, res) => {
     )[0];
   const token = crypto.randomBytes(24).toString("base64url"); // 192 ביט - לא ניתן לניחוש
 
+  const DELIVERY_HE = { zoom: "זום", frontal: "פרונטלי" };
   const reg = new Registration({
     schemaVersion: 2,
     student: student._id,
     studentName: fullName,
     rep: rep._id,
     repName: rep.name,
-    course: course._id,
-    courseRaw: course.name,
-    courseField: course.field,
-    cohortLabel: course.cohortLabel,
+    course: legacyCourse?._id,
+    courseRaw: courseName,
+    courseField: legacyCourse?.field || cohort.catalogCourse.name,
+    cohortLabel: legacyCourse?.cohortLabel || cohort.label || "",
+    cohort: cohort._id, // שיוך רשמי למחזור — נספר ב"נרשמים" וחוסם מחיקת מחזור בשוגג
+    deliveryMode: deliveryMode || undefined,
     dealDate: new Date(),
     dealPrice: finalPrice,
     discountPercent,
@@ -231,7 +297,7 @@ export const createDeal = asyncHandler(async (req, res) => {
     paymentCategory: dominant,
     noteEntries: [
       {
-        text: `נוצר מהטופס החיצוני · נציגה: ${rep.name} · ת.ז. ${idNumber} · ${email} · ${phone} · ${city}, ${street} ${houseNumber}${b.apartment ? `/${cleanStr(b.apartment)}` : ""}`,
+        text: `נוצר מהטופס החיצוני · נציגה: ${rep.name} · ת.ז. ${idNumber} · ${email} · ${phone} · ${city}, ${street} ${houseNumber}${b.apartment ? `/${cleanStr(b.apartment)}` : ""}${deliveryMode ? ` · אופן השתתפות: ${DELIVERY_HE[deliveryMode]}${cohort.deliveryMode === "hybrid" ? " (לפי בחירת הנרשם/ת)" : ""}` : ""}`,
         date: new Date(),
         byName: `${rep.name} (טופס חיצוני)`,
       },
@@ -247,7 +313,7 @@ export const createDeal = asyncHandler(async (req, res) => {
     data: {
       dealId: String(reg._id),
       studentName: fullName,
-      courseName: course.name,
+      courseName,
       totalAmount: reg.totalAmount,
       contractToken: token,
     },

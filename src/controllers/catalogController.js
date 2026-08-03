@@ -185,6 +185,7 @@ const cohortJson = (c, enrolled = 0) => ({
   teacher: cohortTeachers(c)[0] ? String(cohortTeachers(c)[0]._id || cohortTeachers(c)[0]) : null,
   teacherName: teacherNamesOf(c), // "עמר לוין + אביטל דניאל"
   defaultLocation: c.defaultLocation || '',
+  deliveryMode: c.deliveryMode || '',
   status: c.status,
   registrationOpen: Boolean(c.registrationOpen),
   notes: c.notes || '',
@@ -275,6 +276,14 @@ const parseCohortBody = async (b, existing) => {
   }
   if (b.label !== undefined) out.label = cleanStr(b.label);
   if (b.defaultLocation !== undefined) out.defaultLocation = cleanStr(b.defaultLocation);
+  // אופן קיום: זום / פרונטלי / לפי בחירה (hybrid); ריק = לא הוגדר
+  if (b.deliveryMode !== undefined) {
+    const dm = cleanStr(b.deliveryMode);
+    if (dm && !['zoom', 'frontal', 'hybrid'].includes(dm)) {
+      throw ApiError.badRequest('אופן קיום המחזור אינו תקין');
+    }
+    out.deliveryMode = dm || null;
+  }
   if (b.notes !== undefined) out.notes = cleanStr(b.notes);
   if (b.status !== undefined) {
     if (!COHORT_STATUSES.includes(b.status)) throw ApiError.badRequest('סטטוס מחזור אינו תקין');

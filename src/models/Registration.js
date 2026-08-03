@@ -105,6 +105,9 @@ const registrationSchema = new Schema(
     cohortLabel: { type: String, trim: true }, // מחזור, למשל 9/25
     // שיוך רשמי למחזור קורס (CourseCohort) — נקבע בעמוד עריכת הנתונים ע"י הנציגה
     cohort: { type: Schema.Types.ObjectId, ref: "CourseCohort", index: true },
+    // אופן ההשתתפות של הנרשם/ת: זום או פרונטלי. נקבע בטופס החיצוני — במחזור
+    // "לפי בחירה" (hybrid) זו הבחירה של הנרשם/ת; במחזור קבוע זה האופן של המחזור.
+    deliveryMode: { type: String, enum: ["zoom", "frontal"] },
 
     // --- dates ---
     dealDate: { type: Date, index: true }, // תאריך עסקה

@@ -47,6 +47,8 @@ const courseCohortSchema = new Schema(
     // שדה המרצה הבודד המקורי — נשמר מסונכרן ל-teachers[0] לתאימות לאחור.
     teacher: { type: Schema.Types.ObjectId, ref: 'Teacher', index: true },
     defaultLocation: { type: String, trim: true }, // מיקום דיפולטיבי למפגשים
+    // אופן קיום המחזור: זום / פרונטלי / hybrid = הנרשם בוחר בין שניהם
+    deliveryMode: { type: String, enum: ['zoom', 'frontal', 'hybrid'] },
     sessions: { type: [sessionSchema], default: [] },
     status: {
       type: String,
