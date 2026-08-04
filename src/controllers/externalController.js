@@ -7,6 +7,7 @@ import Course from "../models/Course.js";
 import CourseCohort from "../models/CourseCohort.js";
 import User from "../models/User.js";
 import ContractPdf from "../models/ContractPdf.js";
+import { attachCreationReceipts } from "./registrationController.js";
 import { sendOneEmail } from "../utils/mailer.js";
 import { contractEmailHtml } from "../utils/contractEmailHtml.js";
 
@@ -307,6 +308,11 @@ export const createDeal = asyncHandler(async (req, res) => {
   });
   reg.recompute();
   await reg.save();
+
+  // אסמכתאות העברה בנקאית שצורפו כבר בטופס (אופציונלי)
+  if (await attachCreationReceipts(reg, rawPayments, `${rep.name} (טופס חיצוני)`)) {
+    await reg.save();
+  }
 
   res.status(201).json({
     success: true,

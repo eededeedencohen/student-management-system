@@ -3,6 +3,7 @@ import Student from "../models/Student.js";
 import User from "../models/User.js";
 import Course from "../models/Course.js";
 import Lead from "../models/Lead.js";
+import PaymentReceipt from "../models/PaymentReceipt.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { parseDateQuery } from "../utils/dateRanges.js";
@@ -317,6 +318,11 @@ export const create = asyncHandler(async (req, res) => {
     });
     reg.recompute(); // derives totalAmount/totalPaid/outstanding/status/nextPaymentDate
     await reg.save();
+
+    // אסמכתאות העברה בנקאית שצורפו כבר בטופס היצירה (אופציונלי)
+    if (await attachCreationReceipts(reg, body.payments || [], uname)) {
+      await reg.save();
+    }
 
     // Close the originating lead: mark it "won" and link it to this deal.
     if (body.lead) {
@@ -832,6 +838,120 @@ export const markPaymentPaid = asyncHandler(async (req, res) => {
   res.json({ success: true, data: reg });
 });
 
+/** האם המחרוזת היא data-URL של תמונה (אסמכתא)? */
+export const isImageDataUrl = (s) =>
+  typeof s === "string" && /^data:image\/[a-z0-9.+-]+;base64,/i.test(s);
+
+/**
+ * שמירת אסמכתאות שצורפו כבר ביצירת העסקה (טופס פנימי/חיצוני).
+ * rawPayments = המערך שהגיע מהקליינט (אותו סדר כמו reg.payments אחרי היצירה);
+ * לכל תשלום עם receiptImageDataUrl נוצרת רשומת PaymentReceipt, ועל התשלום
+ * נרשמים הדגל, המספר והחותם. מחזירה true אם צריך reg.save() נוסף.
+ */
+export async function attachCreationReceipts(reg, rawPayments, byName) {
+  let changed = false;
+  for (let i = 0; i < rawPayments.length && i < reg.payments.length; i += 1) {
+    const raw = rawPayments[i] || {};
+    const reference = cleanStr(raw.receiptReference);
+    const image = isImageDataUrl(raw.receiptImageDataUrl)
+      ? raw.receiptImageDataUrl
+      : "";
+    if (!reference && !image) continue;
+    const p = reg.payments[i];
+    if (image) {
+      await PaymentReceipt.findOneAndUpdate(
+        { registration: reg._id, paymentId: p._id },
+        {
+          $set: {
+            imageDataUrl: image,
+            byteLength: image.length,
+            uploadedAt: new Date(),
+            uploadedByName: byName || "",
+          },
+        },
+        { upsert: true },
+      );
+      p.receiptImage = true;
+    }
+    if (reference) p.receiptReference = reference;
+    p.receiptUploadedAt = new Date();
+    p.receiptUploadedByName = byName || "";
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * PUT /api/registrations/:id/payments/:paymentId/receipt  (v2)
+ * צירוף/עדכון אסמכתת העברה בנקאית: מספר אסמכתא + תמונה (dataURL).
+ * התמונה נשמרת ב-PaymentReceipt; על התשלום רק הדגל, המספר והחותם.
+ * Permission: נציגה רק בעסקאות שלה; מנהל בכולן.
+ */
+export const setPaymentReceipt = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אפשר לעדכן אסמכתאות רק בעסקאות שלך");
+  }
+  const p = reg.payments.id(req.params.paymentId);
+  if (!p) throw ApiError.notFound("התשלום לא נמצא");
+
+  const reference = cleanStr(req.body?.reference);
+  const imageDataUrl =
+    typeof req.body?.imageDataUrl === "string" ? req.body.imageDataUrl : "";
+  if (imageDataUrl && !isImageDataUrl(imageDataUrl))
+    throw ApiError.badRequest("קובץ האסמכתא חייב להיות תמונה");
+  if (imageDataUrl.length > 12 * 1024 * 1024)
+    throw ApiError.badRequest("תמונת האסמכתא גדולה מדי (עד ~8MB)");
+  const uname = req.user?.name || "";
+
+  if (imageDataUrl) {
+    await PaymentReceipt.findOneAndUpdate(
+      { registration: reg._id, paymentId: p._id },
+      {
+        $set: {
+          imageDataUrl,
+          byteLength: imageDataUrl.length,
+          uploadedAt: new Date(),
+          uploadedByName: uname,
+        },
+      },
+      { upsert: true },
+    );
+    p.receiptImage = true;
+  }
+  // שליחת reference (גם ריק) מעדכנת את המספר; אי-שליחה משאירה את הקיים
+  if ("reference" in (req.body || {})) p.receiptReference = reference || undefined;
+  p.receiptUploadedAt = new Date();
+  p.receiptUploadedByName = uname;
+  await reg.save();
+  res.json({ success: true, data: reg });
+});
+
+/** GET /api/registrations/:id/payments/:paymentId/receipt - פרטי האסמכתא + התמונה. */
+export const getPaymentReceipt = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id).select("rep payments");
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אין הרשאה לצפות באסמכתאות של עסקה זו");
+  }
+  const p = reg.payments.id(req.params.paymentId);
+  if (!p) throw ApiError.notFound("התשלום לא נמצא");
+  const doc = await PaymentReceipt.findOne({
+    registration: reg._id,
+    paymentId: p._id,
+  }).lean();
+  res.json({
+    success: true,
+    data: {
+      reference: p.receiptReference || "",
+      imageDataUrl: doc?.imageDataUrl || "",
+      uploadedAt: p.receiptUploadedAt || doc?.uploadedAt || null,
+      uploadedByName: p.receiptUploadedByName || doc?.uploadedByName || "",
+    },
+  });
+});
+
 /** PATCH /api/registrations/:id/payments/:paymentId/unpay - undo "סמן כשולם". */
 export const unmarkPaymentPaid = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
@@ -888,4 +1008,117 @@ export const downloadContractPdf = asyncHandler(async (req, res) => {
     `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
   );
   return res.send(Buffer.from(doc.pdfBase64, "base64"));
+});
+
+/**
+ * POST /api/registrations/:id/contract
+ * יצירת חוזה לעסקה קיימת (עסקאות ישנות שנוצרו בלי חוזה): טוקן + סטטוס pending.
+ * אידמפוטנטי — אם כבר קיים חוזה, מחזיר את העסקה כמו שהיא. משם אפשר לחתום
+ * דיגיטלית (קישור), להוריד PDF להדפסה, או להעלות עותק חתום סרוק.
+ */
+export const createContract = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אפשר ליצור חוזה רק בעסקאות שלך");
+  }
+  if (!reg.contract?.token) {
+    const { randomBytes } = await import("crypto");
+    const token = randomBytes(24).toString("base64url"); // 192 ביט - לא ניתן לניחוש
+    reg.contract = { token, status: "pending", createdAt: new Date() };
+    reg.noteEntries.push({
+      text: `נוצר חוזה לעסקה (ידנית מעמוד הסטודנט) ע"י ${req.user?.name || "משתמש"}`,
+      date: new Date(),
+      byName: req.user?.name || "",
+    });
+    await reg.save();
+  }
+  const { default: ContractPdf } = await import("../models/ContractPdf.js");
+  const pdfStored = Boolean(await ContractPdf.exists({ registration: reg._id }));
+  res.status(201).json({
+    success: true,
+    data: { ...reg.toObject(), contractPdfStored: pdfStored },
+  });
+});
+
+/**
+ * POST /api/registrations/:id/contract/upload-signed
+ * העלאת חוזה חתום ידנית (סריקה/צילום שהומרו ל-PDF בצד הלקוח). שומר את הקובץ
+ * כעותק הרשמי (ContractPdf, פעם אחת בלבד) ומסמן את החוזה כחתום — בדיוק כמו
+ * חתימה דיגיטלית: status=signed + checklist.signedTakanon.
+ */
+export const uploadSignedContract = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אפשר להעלות חוזה רק בעסקאות שלך");
+  }
+
+  const pdfBase64 = String(req.body?.pdfBase64 || "")
+    .replace(/^data:application\/pdf;base64,/, "")
+    .replace(/\s+/g, "");
+  if (!pdfBase64 || pdfBase64.length < 1000)
+    throw ApiError.badRequest("קובץ ה-PDF חסר או פגום");
+  if (pdfBase64.length > 14_000_000)
+    throw ApiError.badRequest("קובץ ה-PDF גדול מדי");
+  // חייב להיות PDF אמיתי ("%PDF" = "JVBER" ב-base64) — לא בייטים שרירותיים
+  if (!pdfBase64.startsWith("JVBER"))
+    throw ApiError.badRequest("הקובץ אינו PDF תקין");
+
+  const { default: ContractPdf } = await import("../models/ContractPdf.js");
+  if (reg.contract?.status === "signed") {
+    const exists = await ContractPdf.exists({ registration: reg._id });
+    if (exists)
+      throw ApiError.badRequest("החוזה כבר חתום וקיים לו עותק שמור");
+  }
+
+  // עסקה בלי חוזה: נוצר חוזה במקום (ההעלאה עצמה היא החתימה)
+  if (!reg.contract?.token) {
+    const { randomBytes } = await import("crypto");
+    reg.contract = {
+      token: randomBytes(24).toString("base64url"),
+      status: "pending",
+      createdAt: new Date(),
+    };
+  }
+
+  const uname = req.user?.name || "משתמש";
+  reg.contract.status = "signed";
+  reg.contract.signedAt = reg.contract.signedAt || new Date();
+  reg.contract.signerName =
+    cleanStr(req.body?.signerName) || reg.studentName || "";
+  reg.contract.signedVia = "upload";
+  // כמו בחתימה דיגיטלית — סוגר אוטומטית את "נחתם תקנון" בצ'ק-ליסט
+  reg.checklist = {
+    ...(reg.checklist?.toObject?.() || reg.checklist || {}),
+    signedTakanon: true,
+  };
+  reg.noteEntries.push({
+    text: `הועלה חוזה חתום ידנית (סריקה/צילום) ע"י ${uname}`,
+    date: new Date(),
+    byName: uname,
+  });
+
+  const filename = `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
+  // $setOnInsert — העותק הראשון שנשמר הוא הקובע; אין דריסה (מניעת זיוף)
+  await ContractPdf.findOneAndUpdate(
+    { registration: reg._id },
+    {
+      $setOnInsert: {
+        registration: reg._id,
+        token: reg.contract.token,
+        filename,
+        pdfBase64,
+        byteLength: pdfBase64.length,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+
+  reg.recompute();
+  await reg.save();
+  res.json({
+    success: true,
+    data: { ...reg.toObject(), contractPdfStored: true },
+  });
 });

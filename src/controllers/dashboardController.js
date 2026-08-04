@@ -645,6 +645,85 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5),
     }));
 
+  // --- אסמכתאות העברה בנקאית (v2) -----------------------------------------
+  // חוק: העברה בנקאית מחייבת אסמכתא - תמונה + מספר. בלי חלון זמן (חוב אסמכתא
+  // לא מתיישן). שתי תזכורות:
+  //   - שולם (ידנית/אוטומטית) אבל האסמכתא חסרה (תמונה ו/או מספר)
+  //   - הגיע מועד ההעברה והתשלום עדיין פתוח - לוודא שבוצעה ולצרף אסמכתא
+  const receiptRows = await Registration.aggregate([
+    { $match: match },
+    { $unwind: "$payments" },
+    {
+      $match: {
+        "payments.type": { $in: ["advance", "one_time", "installment"] }, // v2 בלבד
+        $or: [
+          { "payments.methodCategory": "transfer" },
+          { "payments.method": "transfer" },
+        ],
+      },
+    },
+    {
+      $project: {
+        paymentId: "$payments._id",
+        student: 1,
+        studentName: 1,
+        courseRaw: 1,
+        courseField: 1,
+        cohortLabel: 1,
+        repName: 1,
+        amount: "$payments.amount",
+        dueDate: "$payments.dueDate",
+        paid: "$payments.paid",
+        method: "$payments.method",
+        methodCategory: "$payments.methodCategory",
+        note: "$payments.note",
+        confirmedAt: "$payments.confirmedAt",
+        receiptReference: "$payments.receiptReference",
+        receiptImage: "$payments.receiptImage",
+      },
+    },
+    { $sort: { dueDate: 1 } },
+  ]);
+  // חתך השקה: חובת האסמכתא נכנסה לתוקף ב-4/8/2026. העברות ותיקות ששולמו
+  // לפני כן לא מוצפות רטרואקטיבית (אפשר עדיין לצרף להן אסמכתא בעמוד הסטודנט).
+  const RECEIPTS_LAUNCH = new Date("2026-08-04T00:00:00Z");
+  const receipts = [];
+  for (const r of receiptRows) {
+    const hasImage = Boolean(r.receiptImage);
+    const hasRef = Boolean(String(r.receiptReference || "").trim());
+    const overdueDays = r.dueDate
+      ? Math.max(0, Math.floor((now - new Date(r.dueDate)) / 864e5))
+      : 0;
+    if (r.paid) {
+      if (hasImage && hasRef) continue; // אסמכתא מלאה - אין משימה
+      const anchor = Math.max(
+        r.dueDate ? new Date(r.dueDate).getTime() : 0,
+        r.confirmedAt ? new Date(r.confirmedAt).getTime() : 0,
+      );
+      if (anchor < RECEIPTS_LAUNCH.getTime()) continue; // מהעולם הישן - לא נדרש
+      const missing =
+        !hasImage && !hasRef
+          ? "חסרות תמונת האסמכתא ומספר האסמכתא"
+          : !hasImage
+            ? "חסרה תמונת האסמכתא"
+            : "חסר מספר האסמכתא";
+      receipts.push({
+        ...base(r),
+        note: [missing, r.note].filter(Boolean).join(" · "),
+        overdueDays,
+      });
+    } else if (r.dueDate && new Date(r.dueDate) <= now) {
+      if (/הופסק/.test(r.note || "")) continue; // הוראה שבוטלה - מטופלת בקבוצות האחרות
+      receipts.push({
+        ...base(r),
+        note: ["מועד ההעברה הגיע - לוודא שבוצעה ולצרף אסמכתא", r.note]
+          .filter(Boolean)
+          .join(" · "),
+        overdueDays,
+      });
+    }
+  }
+
   const sum = (list) => round2(list.reduce((a, x) => a + (x.amount || 0), 0));
   res.json({
     success: true,
@@ -653,16 +732,19 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       confirm,
       due,
       stopped,
+      receipts,
       totals: {
         verify: verify.length,
         confirm: confirm.length,
         due: due.length,
         stopped: stopped.length,
-        open: verify.length + confirm.length + stopped.length, // מה שדורש פעולה
+        receipts: receipts.length,
+        open: verify.length + confirm.length + stopped.length + receipts.length, // מה שדורש פעולה
         verifyAmount: sum(verify),
         confirmAmount: sum(confirm),
         dueAmount: sum(due),
         stoppedAmount: sum(stopped),
+        receiptsAmount: sum(receipts),
       },
       window: { since, until, now },
     },

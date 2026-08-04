@@ -30,15 +30,17 @@ const app = express();
 const origins = (process.env.CLIENT_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use(cors(origins.length ? { origin: origins, credentials: true } : { origin: true, credentials: true }));
 
-// JSON body: 2mb default everywhere; the signed-contract email carries a base64 PDF,
-// so allow a larger body only on that one public route.
+// JSON body: 2mb default everywhere; larger only where base64 images/PDFs travel:
+// מייל חוזה חתום (PDF), צירוף אסמכתת העברה, ויצירת עסקה שיכולה לשאת אסמכתאות.
 const jsonSmall = express.json({ limit: '2mb' });
 const jsonLarge = express.json({ limit: '15mb' });
 app.use((req, res, next) => {
-  if (req.method === 'POST' && /^\/api\/public\/contract\/[^/]+\/email$/.test(req.path)) {
-    return jsonLarge(req, res, next);
-  }
-  return jsonSmall(req, res, next);
+  const large =
+    (req.method === 'POST' && /^\/api\/public\/contract\/[^/]+\/email$/.test(req.path)) ||
+    (req.method === 'PUT' && /^\/api\/registrations\/[^/]+\/payments\/[^/]+\/receipt$/.test(req.path)) ||
+    (req.method === 'POST' && /^\/api\/registrations\/[^/]+\/contract\/upload-signed$/.test(req.path)) ||
+    (req.method === 'POST' && (req.path === '/api/public/deals' || req.path === '/api/registrations'));
+  return (large ? jsonLarge : jsonSmall)(req, res, next);
 });
 app.use(express.urlencoded({ extended: true }));
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));

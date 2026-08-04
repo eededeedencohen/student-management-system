@@ -27,6 +27,11 @@ const paymentSchema = new Schema(
     note: { type: String, trim: true },
     kind: { type: String, enum: ["advance", "balance", "extra"] },
     source: { type: String }, // רפרנס: מאיזו שורה/הערה במקור הגיע התשלום
+    // --- אסמכתת העברה בנקאית (v2): העברה ששולמה מחייבת תמונה + מספר ---------
+    receiptReference: { type: String, trim: true }, // מספר אסמכתא
+    receiptImage: { type: Boolean }, // צורפה תמונה? (התמונה עצמה ב-PaymentReceipt)
+    receiptUploadedAt: { type: Date },
+    receiptUploadedByName: { type: String },
   },
   { _id: true }, // v2 payments need a stable id so they can be marked paid / referenced
 );
@@ -63,6 +68,7 @@ const contractSchema = new Schema(
     signedAt: { type: Date },
     signerName: { type: String }, // השם שהוקלד באישור החתימה
     signatureDataUrl: { type: String }, // תמונת החתימה (data URL)
+    signedVia: { type: String }, // "upload" = הועלה חוזה חתום ידנית (סריקה); ריק = חתימה דיגיטלית
     emailedAt: { type: Date }, // מתי נשלח עותק PDF חתום ללקוח (למניעת שליחה כפולה)
     emailedTo: { type: String }, // כתובת המייל שאליה נשלח העותק
   },

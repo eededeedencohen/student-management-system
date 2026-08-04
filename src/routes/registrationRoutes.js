@@ -13,6 +13,8 @@ router.get("/", ctrl.list);
 router.get("/debtors", ctrl.debtors);
 router.get("/:id", ctrl.detail);
 router.get("/:id/contract.pdf", ctrl.downloadContractPdf); // עותק ה-PDF החתום השמור
+router.post("/:id/contract", ctrl.createContract); // יצירת חוזה לעסקה ישנה (דיגיטלי/להדפסה)
+router.post("/:id/contract/upload-signed", ctrl.uploadSignedContract); // העלאת חוזה חתום סרוק
 
 router.post("/", ctrl.create);
 router.put("/:id", ctrl.update);
@@ -29,6 +31,10 @@ router.patch("/:id/installments/:index/unconfirm", ctrl.unconfirmInstallment);
 // unified payment (v2): mark / unmark a payment as collected ("סמן כשולם")
 router.patch("/:id/payments/:paymentId/pay", ctrl.markPaymentPaid);
 router.patch("/:id/payments/:paymentId/unpay", ctrl.unmarkPaymentPaid);
+
+// אסמכתת העברה בנקאית (v2): צירוף/צפייה - תמונה + מספר אסמכתא
+router.put("/:id/payments/:paymentId/receipt", ctrl.setPaymentReceipt);
+router.get("/:id/payments/:paymentId/receipt", ctrl.getPaymentReceipt);
 
 router.delete("/:id", ctrl.remove);
 
