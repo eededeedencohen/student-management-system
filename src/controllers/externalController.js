@@ -12,7 +12,7 @@ import { sendOneEmail } from "../utils/mailer.js";
 import { contractEmailHtml } from "../utils/contractEmailHtml.js";
 
 /**
- * externalController — הטופס החיצוני (ללא התחברות) + החוזה הדיגיטלי.
+ * externalController - הטופס החיצוני (ללא התחברות) + החוזה הדיגיטלי.
  *
  * "חיצוני" = נגיש בלי טוקן: נציגה פותחת קישור, ממלאת עסקה, ובסוף מפיקה קישור
  * חוזה ייחודי שהלקוח חותם בו ביד/עכבר. החתימה מעדכנת אוטומטית את
@@ -31,7 +31,7 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /* ------------------------------------------------------------------ */
 
 /**
- * קורס NLP פרקטישינר — התעודה הבינלאומית מונפקת באנגלית, ולכן ההרשמה אליו
+ * קורס NLP פרקטישינר - התעודה הבינלאומית מונפקת באנגלית, ולכן ההרשמה אליו
  * מחייבת שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs). הזיהוי לפי שם הקורס,
  * עמיד לכתיב מלא/חסר (פרקטישינר/פרקטישינייר) ולשם באנגלית.
  */
@@ -46,19 +46,22 @@ const requiresEnglishDetails = (courseName = "") =>
  */
 export const formOptions = asyncHandler(async (req, res) => {
   const [reps, cohorts] = await Promise.all([
-    User.find({ role: "rep", active: true }).select("name").sort({ name: 1 }).lean(),
+    User.find({ role: "rep", active: true })
+      .select("name")
+      .sort({ name: 1 })
+      .lean(),
     CourseCohort.find({ registrationOpen: true })
       .populate("catalogCourse", "name price")
       .lean(),
   ]);
   const courses = cohorts
-    .filter((c) => c.catalogCourse) // מחזור יתום ללא קורס קטלוגי — אין מה להציג
+    .filter((c) => c.catalogCourse) // מחזור יתום ללא קורס קטלוגי - אין מה להציג
     .map((c) => {
       const sessions = [...(c.sessions || [])].sort(
         (a, b) => new Date(a.date) - new Date(b.date),
       );
       return {
-        _id: String(c._id), // מזהה המחזור — הטופס שולח אותו כ-course ביצירת העסקה
+        _id: String(c._id), // מזהה המחזור - הטופס שולח אותו כ-course ביצירת העסקה
         name: c.catalogCourse.name,
         cohortLabel: c.label || "",
         price: Number(c.catalogCourse.price) || 0,
@@ -68,8 +71,9 @@ export const formOptions = asyncHandler(async (req, res) => {
       };
     })
     .sort((a, b) => {
-      // מתחילים בקרוב — קודם; מחזורים בלי מפגשים — בסוף, לפי שם
-      if (a.startDate && b.startDate) return new Date(a.startDate) - new Date(b.startDate);
+      // מתחילים בקרוב - קודם; מחזורים בלי מפגשים - בסוף, לפי שם
+      if (a.startDate && b.startDate)
+        return new Date(a.startDate) - new Date(b.startDate);
       if (a.startDate) return -1;
       if (b.startDate) return 1;
       return a.name.localeCompare(b.name, "he");
@@ -125,10 +129,14 @@ export const createDeal = asyncHandler(async (req, res) => {
     throw ApiError.badRequest("מספר תעודת הזהות אינו תקין");
   const gender = b.gender === "male" || b.gender === "female" ? b.gender : null;
   if (!gender) throw ApiError.badRequest("יש לבחור מין");
-  // פנייה: גבר תמיד .Mr; אישה בוחרת .Ms/.Mrs. לא חובה — אלא בקורס פרקטישינר
+  // פנייה: גבר תמיד .Mr; אישה בוחרת .Ms/.Mrs. לא חובה - אלא בקורס פרקטישינר
   // (נבדק בהמשך מול הקורס שנבחר), כי שם התעודה באנגלית מחייבת אותה.
   const title =
-    gender === "male" ? "Mr." : ["Ms.", "Mrs."].includes(b.title) ? b.title : null;
+    gender === "male"
+      ? "Mr."
+      : ["Ms.", "Mrs."].includes(b.title)
+        ? b.title
+        : null;
   const phone = cleanStr(b.phone).replace(/[^\d+]/g, "");
   if (phone.replace(/\D/g, "").length < 9)
     throw ApiError.badRequest("מספר טלפון אינו תקין");
@@ -145,13 +153,17 @@ export const createDeal = asyncHandler(async (req, res) => {
   const cohort = await CourseCohort.findById(b.course)
     .populate("catalogCourse", "name price")
     .lean();
-  if (!cohort || !cohort.catalogCourse) throw ApiError.badRequest("יש לבחור קורס מהרשימה");
+  if (!cohort || !cohort.catalogCourse)
+    throw ApiError.badRequest("יש לבחור קורס מהרשימה");
   if (!cohort.registrationOpen) {
     throw ApiError.badRequest("ההרשמה למחזור הזה סגורה - יש לבחור מחזור אחר");
   }
 
-  // NLP פרקטישינר: התעודה מונפקת באנגלית — שם באנגלית ופנייה הם חובה
-  if (requiresEnglishDetails(cohort.catalogCourse.name) && (!firstNameEn || !lastNameEn || !title)) {
+  // NLP פרקטישינר: התעודה מונפקת באנגלית - שם באנגלית ופנייה הם חובה
+  if (
+    requiresEnglishDetails(cohort.catalogCourse.name) &&
+    (!firstNameEn || !lastNameEn || !title)
+  ) {
     throw ApiError.badRequest(
       "לקורס NLP פרקטישינר חובה למלא שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs) - התעודה מונפקת באנגלית",
     );
@@ -170,9 +182,11 @@ export const createDeal = asyncHandler(async (req, res) => {
     deliveryMode = pick;
   }
 
-  // רשומת ה-Course הישנה המקושרת (mirror/רשומת אקסל) — הדוחות והעמוד הראשי רצים עליה
+  // רשומת ה-Course הישנה המקושרת (mirror/רשומת אקסל) - הדוחות והעמוד הראשי רצים עליה
   const legacyCourse = cohort.sourceCourse
-    ? await Course.findById(cohort.sourceCourse).select("name field cohortLabel").lean()
+    ? await Course.findById(cohort.sourceCourse)
+        .select("name field cohortLabel")
+        .lean()
     : null;
   const courseName =
     legacyCourse?.name ||
@@ -258,7 +272,8 @@ export const createDeal = asyncHandler(async (req, res) => {
     if (!student.realIdNumber) student.realIdNumber = idNumber;
     student.gender = gender;
     if (title) student.title = title;
-    else if (gender === "female" && student.title === "Mr.") student.title = undefined; // אישה לא נשארת .Mr
+    else if (gender === "female" && student.title === "Mr.")
+      student.title = undefined; // אישה לא נשארת .Mr
     if (!student.mobile) student.mobile = phone;
     if (!student.email) student.email = email;
     if (!student.city) student.city = city;
@@ -289,7 +304,7 @@ export const createDeal = asyncHandler(async (req, res) => {
     courseRaw: courseName,
     courseField: legacyCourse?.field || cohort.catalogCourse.name,
     cohortLabel: legacyCourse?.cohortLabel || cohort.label || "",
-    cohort: cohort._id, // שיוך רשמי למחזור — נספר ב"נרשמים" וחוסם מחיקת מחזור בשוגג
+    cohort: cohort._id, // שיוך רשמי למחזור - נספר ב"נרשמים" וחוסם מחיקת מחזור בשוגג
     deliveryMode: deliveryMode || undefined,
     dealDate: new Date(),
     dealPrice: finalPrice,
@@ -310,7 +325,9 @@ export const createDeal = asyncHandler(async (req, res) => {
   await reg.save();
 
   // אסמכתאות העברה בנקאית שצורפו כבר בטופס (אופציונלי)
-  if (await attachCreationReceipts(reg, rawPayments, `${rep.name} (טופס חיצוני)`)) {
+  if (
+    await attachCreationReceipts(reg, rawPayments, `${rep.name} (טופס חיצוני)`)
+  ) {
     await reg.save();
   }
 
@@ -338,7 +355,7 @@ const findByToken = async (token) => {
   return reg;
 };
 
-/** תיאור אנושי של שיטת התשלום עבור החוזה ("אשראי ב-6 תשלומים", "העברה בנקאית"…). */
+/** תיאור אנושי של שיטת התשלום עבור החוזה ("מקדמה באשראי + אשראי ב-5 תשלומים"…). */
 function paymentMethodText(payments = []) {
   const HE = {
     credit: "אשראי",
@@ -346,13 +363,26 @@ function paymentMethodText(payments = []) {
     cash: "מזומן",
     transfer: "העברה בנקאית",
   };
+  // המקדמה מוצגת תמיד כחלק נפרד במשפט - גם כשהאמצעי שלה זהה לשאר התשלומים.
+  // אחרת "אשראי ב-5 תשלומים" מסתיר שהמקדמה היא חיוב אשראי נוסף מעבר לפריסה.
+  const advances = payments.filter((p) => p.type === "advance");
+  const rest = payments.filter((p) => p.type !== "advance");
+
   const parts = [];
+  const advSeen = new Set();
+  for (const p of advances) {
+    const m = p.method || "";
+    if (advSeen.has(m)) continue;
+    advSeen.add(m);
+    parts.push(`מקדמה ב${HE[m] || m}`);
+  }
+
   const seen = new Set();
-  for (const p of payments) {
+  for (const p of rest) {
     const m = p.method || "";
     if (seen.has(m)) continue;
     seen.add(m);
-    const ofMethod = payments.filter((x) => (x.method || "") === m);
+    const ofMethod = rest.filter((x) => (x.method || "") === m);
     const spread = ofMethod.find((x) => Number(x.installments) > 1);
     if (m === "credit" && spread) {
       parts.push(`אשראי ב-${spread.installments} תשלומים`);
@@ -365,7 +395,7 @@ function paymentMethodText(payments = []) {
   return parts.join(" + ") || "-";
 }
 
-/** GET /api/public/contract/:token — תוכן החוזה לצפייה/חתימה. */
+/** GET /api/public/contract/:token - תוכן החוזה לצפייה/חתימה. */
 export const getContract = asyncHandler(async (req, res) => {
   const reg = await findByToken(req.params.token);
   if (!reg.contract.viewedAt) {
@@ -380,7 +410,9 @@ export const getContract = asyncHandler(async (req, res) => {
         .lean()
     : null;
   // האם כבר נשמר עותק PDF? (לשימוש ה"ריפוי-עצמי" בצד הלקוח אם ההפקה נכשלה בעבר)
-  const pdfStored = signed ? Boolean(await ContractPdf.exists({ registration: reg._id })) : false;
+  const pdfStored = signed
+    ? Boolean(await ContractPdf.exists({ registration: reg._id }))
+    : false;
   res.json({
     success: true,
     data: {
@@ -411,7 +443,7 @@ export const getContract = asyncHandler(async (req, res) => {
   });
 });
 
-/** POST /api/public/contract/:token/sign — חתימה דיגיטלית (חד-פעמית). */
+/** POST /api/public/contract/:token/sign - חתימה דיגיטלית (חד-פעמית). */
 export const signContract = asyncHandler(async (req, res) => {
   const reg = await findByToken(req.params.token);
   if (reg.contract.status === "signed") {
@@ -430,7 +462,10 @@ export const signContract = asyncHandler(async (req, res) => {
   reg.contract.signerName = signerName;
   reg.contract.signatureDataUrl = sig;
   // החתימה סוגרת אוטומטית את סעיף "נחתם תקנון" בצ'ק-ליסט של העסקה
-  reg.checklist = { ...(reg.checklist?.toObject?.() || reg.checklist || {}), signedTakanon: true };
+  reg.checklist = {
+    ...(reg.checklist?.toObject?.() || reg.checklist || {}),
+    signedTakanon: true,
+  };
   reg.noteEntries.push({
     text: `החוזה נחתם דיגיטלית ע"י ${signerName}`,
     date: new Date(),
@@ -449,7 +484,7 @@ export const signContract = asyncHandler(async (req, res) => {
  * POST /api/public/contract/:token/email
  * body: { pdfBase64, force? }
  * מקבל את ה-PDF החתום, שומר עותק לשליחה חוזרת בעתיד, ושולח ללקוח. "מיטב-מאמץ":
- * אם אין חשבון Google מחובר או אין מייל — לא נכשל, רק מדווח (וה-PDF כבר נשמר, כך
+ * אם אין חשבון Google מחובר או אין מייל - לא נכשל, רק מדווח (וה-PDF כבר נשמר, כך
  * שאפשר לשלוח מאוחר יותר מעמוד "מיילים"). חד-פעמי אלא אם force=true (שליחה חוזרת).
  */
 export const emailSignedContract = asyncHandler(async (req, res) => {
@@ -468,14 +503,14 @@ export const emailSignedContract = asyncHandler(async (req, res) => {
   if (pdfBase64.length > 14_000_000) {
     throw ApiError.badRequest("קובץ ה-PDF גדול מדי");
   }
-  // חייב להיות PDF אמיתי (הסימן "%PDF" = "JVBER" ב-base64) — לא להעלות בייטים שרירותיים
+  // חייב להיות PDF אמיתי (הסימן "%PDF" = "JVBER" ב-base64) - לא להעלות בייטים שרירותיים
   if (!pdfBase64.startsWith("JVBER")) {
     throw ApiError.badRequest("הקובץ אינו PDF תקין");
   }
 
   const filename = `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
 
-  // שומרים עותק PDF רק בפעם הראשונה ($setOnInsert) — כדי שאפשר יהיה לשלוח שוב מאוחר
+  // שומרים עותק PDF רק בפעם הראשונה ($setOnInsert) - כדי שאפשר יהיה לשלוח שוב מאוחר
   // יותר, אך בלי לאפשר לדרוס את "העותק החתום שברשומה" בהעלאה חוזרת (מניעת זיוף).
   await ContractPdf.findOneAndUpdate(
     { registration: reg._id },
@@ -495,35 +530,49 @@ export const emailSignedContract = asyncHandler(async (req, res) => {
   if (reg.contract.emailedAt && !force) {
     return res.json({
       success: true,
-      data: { emailed: true, already: true, to: reg.contract.emailedTo || null },
+      data: {
+        emailed: true,
+        already: true,
+        to: reg.contract.emailedTo || null,
+      },
     });
   }
 
   const student = reg.student
-    ? await Student.findById(reg.student).select("email firstName fullName").lean()
+    ? await Student.findById(reg.student)
+        .select("email firstName fullName")
+        .lean()
     : null;
   const to = cleanStr(student?.email).toLowerCase();
   if (!to) {
-    return res.json({ success: true, data: { emailed: false, reason: "no_email" } });
+    return res.json({
+      success: true,
+      data: { emailed: false, reason: "no_email" },
+    });
   }
 
   try {
     await sendOneEmail({
       to,
       toName: reg.studentName || "",
-      subject: "עותק חתום — תקנון מכללת ספרא",
+      subject: "עותק חתום - תקנון מכללת ספרא",
       html: contractEmailHtml({
         name: student?.firstName || reg.studentName,
         courseName: reg.courseRaw,
       }),
-      attachments: [{ filename, mimeType: "application/pdf", base64: pdfBase64 }],
+      attachments: [
+        { filename, mimeType: "application/pdf", base64: pdfBase64 },
+      ],
     });
   } catch (err) {
-    // לא מחובר / ההרשאה בוטלה — החתימה כבר הצליחה וה-PDF נשמר; לא מפילים את הזרימה.
+    // לא מחובר / ההרשאה בוטלה - החתימה כבר הצליחה וה-PDF נשמר; לא מפילים את הזרימה.
     if (err.notConnected || err.fatalAuth) {
       return res.json({
         success: true,
-        data: { emailed: false, reason: err.notConnected ? "not_connected" : "auth_failed" },
+        data: {
+          emailed: false,
+          reason: err.notConnected ? "not_connected" : "auth_failed",
+        },
       });
     }
     throw err;
@@ -542,7 +591,7 @@ export const emailSignedContract = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { emailed: true, to } });
 });
 
-/** GET /api/public/contract/:token/status — ל-polling חי מהטופס של הנציגה. */
+/** GET /api/public/contract/:token/status - ל-polling חי מהטופס של הנציגה. */
 export const contractStatus = asyncHandler(async (req, res) => {
   const reg = await findByToken(req.params.token);
   res.json({
@@ -557,7 +606,7 @@ export const contractStatus = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/public/contract/:token/pdf
- * הורדת עותק ה-PDF החתום ע"י החותם עצמו — דרך אותו token סודי שמקנה גישה לחוזה.
+ * הורדת עותק ה-PDF החתום ע"י החותם עצמו - דרך אותו token סודי שמקנה גישה לחוזה.
  * זמין רק אחרי חתימה; אם אין עותק שמור (חתימות ישנות) הקליינט מפיק אחד מקומית.
  */
 export const downloadSignedContractPdf = asyncHandler(async (req, res) => {
@@ -569,7 +618,8 @@ export const downloadSignedContractPdf = asyncHandler(async (req, res) => {
   if (!doc?.pdfBase64) {
     throw ApiError.notFound("אין עותק PDF שמור לחוזה זה");
   }
-  const filename = doc.filename || `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
+  const filename =
+    doc.filename || `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
