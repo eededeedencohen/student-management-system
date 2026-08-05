@@ -43,7 +43,7 @@ const PERIOD_MONTHS = {
  * Resolve the commission period into { dateFilter, baseMonths }:
  *   - The window is PERIOD-TO-DATE: it starts at the CALENDAR start of the
  *     period and ends today. "שבוע" on a Sunday counts only that Sunday;
- *     "חודש" on the 12th counts only the 1st–12th - it never spills into the
+ *     "חודש" on the 12th counts only the 1st-12th - it never spills into the
  *     previous week/month/quarter.
  *   - baseMonths → the FULL period length relative to a month (PERIOD_MONTHS),
  *     not the elapsed part: half = base ×6, week = base ×7/30.

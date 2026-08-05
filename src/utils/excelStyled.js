@@ -1,15 +1,15 @@
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const ExcelJS = require('exceljs');
+const ExcelJS = require("exceljs");
 
 /**
  * Styled reads from the reps'/יקיר's ORIGINAL Excel workbooks (project root) so the
- * editing pages can show exactly what was written — including fill colors, font
- * colors and bold — verbatim.
+ * editing pages can show exactly what was written - including fill colors, font
+ * colors and bold - verbatim.
  *
  * Verified against the real files: fills arrive as argb (FFFFFF00 yellow,
  * FF00FF00 green...), fonts as argb or theme+tint. Theme colors are resolved with
@@ -18,12 +18,20 @@ const ExcelJS = require('exceljs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // server/src/utils → three levels up = project root, where the xlsx files live
-const EXCEL_DIR = process.env.EXCEL_DIR || path.resolve(__dirname, '../../..');
+const EXCEL_DIR = process.env.EXCEL_DIR || path.resolve(__dirname, "../../..");
 
 // Standard Office theme palette (indices 0-9: lt1, dk1, lt2, dk2, accent1-6)
 const THEME_RGB = [
-  'FFFFFF', '000000', 'E7E6E6', '44546A',
-  '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47',
+  "FFFFFF",
+  "000000",
+  "E7E6E6",
+  "44546A",
+  "4472C4",
+  "ED7D31",
+  "A5A5A5",
+  "FFC000",
+  "5B9BD5",
+  "70AD47",
 ];
 
 const applyTint = (hex, tint) => {
@@ -33,7 +41,7 @@ const applyTint = (hex, tint) => {
     const v = tint > 0 ? c + (255 - c) * tint : c * (1 + tint);
     return Math.max(0, Math.min(255, Math.round(v)));
   });
-  return out.map((c) => c.toString(16).padStart(2, '0')).join('');
+  return out.map((c) => c.toString(16).padStart(2, "0")).join("");
 };
 
 /** exceljs color object → CSS hex ("#RRGGBB") or null. */
@@ -41,7 +49,7 @@ const colorToCss = (c) => {
   if (!c) return null;
   if (c.argb) {
     const argb = String(c.argb).toUpperCase();
-    if (argb.length !== 8 || argb.startsWith('00')) return null; // fully transparent
+    if (argb.length !== 8 || argb.startsWith("00")) return null; // fully transparent
     return `#${argb.slice(2)}`;
   }
   if (c.theme !== undefined) {
@@ -52,23 +60,25 @@ const colorToCss = (c) => {
   return null;
 };
 
-const pad2 = (n) => String(n).padStart(2, '0');
+const pad2 = (n) => String(n).padStart(2, "0");
 
-/** Cell text — dates as DD/MM/YYYY instead of the raw JS Date string. */
+/** Cell text - dates as DD/MM/YYYY instead of the raw JS Date string. */
 const cellText = (cell) => {
   const val = cell.value;
-  const d = val instanceof Date ? val : val?.result instanceof Date ? val.result : null;
+  const d =
+    val instanceof Date ? val : val?.result instanceof Date ? val.result : null;
   if (d && !Number.isNaN(d.getTime())) {
     return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
   }
-  const t = String(cell.text ?? '');
+  const t = String(cell.text ?? "");
   // תאים פתולוגיים (למשל מחרוזת נקודה-פסיק ארוכה שנשארה בקובץ) לא ישברו את התצוגה
   return t.length > 200 ? `${t.slice(0, 200)}…` : t;
 };
 
 /** A single cell → plain style/value object for the client. */
 const cellToJson = (cell) => {
-  const fill = cell.fill?.type === 'pattern' ? colorToCss(cell.fill.fgColor) : null;
+  const fill =
+    cell.fill?.type === "pattern" ? colorToCss(cell.fill.fgColor) : null;
   const font = cell.font || {};
   return {
     v: cellText(cell),
@@ -85,8 +95,9 @@ const cellToJson = (cell) => {
 const wbCache = new Map();
 
 async function loadWorkbook(sourceFile) {
-  const base = path.basename(String(sourceFile || ''));
-  if (!base.toLowerCase().endsWith('.xlsx')) throw new Error('קובץ מקור לא נתמך');
+  const base = path.basename(String(sourceFile || ""));
+  if (!base.toLowerCase().endsWith(".xlsx"))
+    throw new Error("קובץ מקור לא נתמך");
   const full = path.join(EXCEL_DIR, base);
   if (!fs.existsSync(full)) throw new Error(`קובץ המקור "${base}" לא נמצא`);
   const mtime = fs.statSync(full).mtimeMs;
@@ -97,7 +108,7 @@ async function loadWorkbook(sourceFile) {
     await wb.xlsx.readFile(full);
     return wb;
   })();
-  // כישלון קריאה לא נשמר במטמון — אחרת תקלה חולפת אחת "הורגת" את התצוגה לכל החיים
+  // כישלון קריאה לא נשמר במטמון - אחרת תקלה חולפת אחת "הורגת" את התצוגה לכל החיים
   promise.catch(() => {
     if (wbCache.get(base)?.promise === promise) wbCache.delete(base);
   });
@@ -113,7 +124,7 @@ const lastUsedCol = (row, cap = 24) => {
   let last = 0;
   for (let c = 1; c <= cap; c += 1) {
     const t = cellText(row.getCell(c));
-    if (t && String(t).trim() !== '') last = c;
+    if (t && String(t).trim() !== "") last = c;
   }
   return last;
 };
@@ -125,7 +136,7 @@ const lastUsedCol = (row, cap = 24) => {
 export async function getStyledRows(sourceFile, sheetName, rowNumbers) {
   const wb = await loadWorkbook(sourceFile);
   const ws = pickSheet(wb, sheetName);
-  if (!ws) throw new Error('הגיליון לא נמצא');
+  if (!ws) throw new Error("הגיליון לא נמצא");
 
   const headerRow = ws.getRow(1);
   const width = Math.max(lastUsedCol(headerRow), 1);
@@ -157,7 +168,7 @@ export async function getStyledRows(sourceFile, sheetName, rowNumbers) {
  */
 export async function getStyledColumnByName(sourceFile, names) {
   const wb = await loadWorkbook(sourceFile);
-  const targets = names.map((n) => String(n || '').trim()).filter(Boolean);
+  const targets = names.map((n) => String(n || "").trim()).filter(Boolean);
   if (!targets.length) return null;
 
   for (const ws of wb.worksheets) {
@@ -165,13 +176,13 @@ export async function getStyledColumnByName(sourceFile, names) {
     for (let r = 1; r <= maxR; r += 1) {
       const row = ws.getRow(r);
       for (let c = 2; c <= Math.min(ws.columnCount, 40); c += 1) {
-        const t = String(row.getCell(c).text || '').trim();
+        const t = String(row.getCell(c).text || "").trim();
         if (!t || !targets.includes(t)) continue;
         // hit: collect the vertical block for column c, labels from column A.
         // הגיליון בנוי בלוקים החוזרים על עצמם (כל בלוק פותח ב"שם הקורס"), ולכן
-        // מתחילים בשורת ההתאמה עצמה ועוצרים כשמתחיל הבלוק הבא — אחרת נגררים
+        // מתחילים בשורת ההתאמה עצמה ועוצרים כשמתחיל הבלוק הבא - אחרת נגררים
         // לתוך הפלט נתונים של קורסים אחרים.
-        const blockStart = String(ws.getRow(r).getCell(1).text || '').trim();
+        const blockStart = String(ws.getRow(r).getCell(1).text || "").trim();
         const entries = [];
         let emptyStreak = 0;
         for (let rr = r; rr <= Math.min(ws.rowCount, r + 24); rr += 1) {
@@ -183,7 +194,12 @@ export async function getStyledColumnByName(sourceFile, names) {
           if (emptyStreak >= 3) break;
           if (!empty) entries.push({ row: rr, label, value });
         }
-        return { file: path.basename(sourceFile), sheet: ws.name, column: c, entries };
+        return {
+          file: path.basename(sourceFile),
+          sheet: ws.name,
+          column: c,
+          entries,
+        };
       }
     }
   }

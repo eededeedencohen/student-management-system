@@ -1,19 +1,20 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
+import path from "path";
+import { fileURLToPath } from "url";
+import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
-const { connectDB, disconnectDB } = await import('../config/db.js');
-const { default: SourceRow } = await import('../models/SourceRow.js');
-const { default: SourceCourseBlock } = await import('../models/SourceCourseBlock.js');
-const { _internals } = await import('../utils/excelStyled.js');
+const { connectDB, disconnectDB } = await import("../config/db.js");
+const { default: SourceRow } = await import("../models/SourceRow.js");
+const { default: SourceCourseBlock } =
+  await import("../models/SourceCourseBlock.js");
+const { _internals } = await import("../utils/excelStyled.js");
 
 const { loadWorkbook, cellToJson, lastUsedCol } = _internals;
 
 /**
- * importExcelSource — parses the ORIGINAL workbooks ONCE and stores their styled rows in
+ * importExcelSource - parses the ORIGINAL workbooks ONCE and stores their styled rows in
  * Mongo (SourceRow / SourceCourseBlock), so the editing pages read plain documents
  * instead of re-parsing .xlsx on every request.
  *
@@ -25,13 +26,13 @@ const { loadWorkbook, cellToJson, lastUsedCol } = _internals;
 
 // The reps' deal workbooks are ROW-oriented (header in row 1, one deal per row).
 const ROW_FILES = [
-  'מיכל.xlsx',
-  'מורן.xlsx',
-  'מיכל - פרטי מרשמים.xlsx',
-  'מורן פרטי נרשמים.xlsx',
+  "מיכל.xlsx",
+  "מורן.xlsx",
+  "מיכל - פרטי מרשמים.xlsx",
+  "מורן פרטי נרשמים.xlsx",
 ];
 // יקיר's course workbook is COLUMN-oriented (one column per course).
-const COLUMN_FILES = ['קורסים.xlsx'];
+const COLUMN_FILES = ["קורסים.xlsx"];
 
 const MAX_COLS = 32;
 const isBlankRow = (cells) => cells.every((c) => !c.v || !String(c.v).trim());
@@ -61,7 +62,9 @@ async function importRowFile(file) {
   for (let i = 0; i < docs.length; i += 500) {
     await SourceRow.insertMany(docs.slice(i, i + 500), { ordered: false });
   }
-  console.log(`  ✓ ${file} · sheet "${ws.name}" · ${docs.length} rows (width ${width})`);
+  console.log(
+    `  ✓ ${file} · sheet "${ws.name}" · ${docs.length} rows (width ${width})`,
+  );
   return docs.length;
 }
 
@@ -75,16 +78,16 @@ async function importColumnFile(file) {
     // Find the label column-A rows that start a block ("שם הקורס"), then read across.
     const nameRows = [];
     for (let r = 1; r <= Math.min(ws.rowCount, 400); r += 1) {
-      const label = String(ws.getRow(r).getCell(1).text || '').trim();
-      if (label === 'שם הקורס') nameRows.push(r);
+      const label = String(ws.getRow(r).getCell(1).text || "").trim();
+      if (label === "שם הקורס") nameRows.push(r);
     }
     if (!nameRows.length) continue;
 
     const blocks = [];
     for (const r of nameRows) {
-      const blockStart = 'שם הקורס';
+      const blockStart = "שם הקורס";
       for (let c = 2; c <= Math.min(ws.columnCount, 40); c += 1) {
-        const courseName = String(ws.getRow(r).getCell(c).text || '').trim();
+        const courseName = String(ws.getRow(r).getCell(c).text || "").trim();
         if (!courseName) continue;
         const entries = [];
         let emptyStreak = 0;
@@ -98,21 +101,31 @@ async function importColumnFile(file) {
           if (!empty) entries.push({ row: rr, label, value });
         }
         if (entries.length) {
-          blocks.push({ file, sheet: ws.name, column: c, startRow: r, courseName, entries });
+          blocks.push({
+            file,
+            sheet: ws.name,
+            column: c,
+            startRow: r,
+            courseName,
+            entries,
+          });
         }
       }
     }
     // Blocks repeat down the sheet reusing column numbers, so dedup by COURSE NAME
-    // (keeping the richest block) — keying by column would drop most of the courses.
+    // (keeping the richest block) - keying by column would drop most of the courses.
     const byName = new Map();
     for (const b of blocks) {
       const cur = byName.get(b.courseName);
-      if (!cur || b.entries.length > cur.entries.length) byName.set(b.courseName, b);
+      if (!cur || b.entries.length > cur.entries.length)
+        byName.set(b.courseName, b);
     }
     const list = [...byName.values()];
     if (list.length) {
       await SourceCourseBlock.insertMany(list, { ordered: false });
-      console.log(`  ✓ ${file} · sheet "${ws.name}" · ${list.length} course columns`);
+      console.log(
+        `  ✓ ${file} · sheet "${ws.name}" · ${list.length} course columns`,
+      );
       total += list.length;
     }
   }
@@ -120,13 +133,17 @@ async function importColumnFile(file) {
 }
 
 const run = async () => {
-  const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+  const only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
   await connectDB();
 
-  const rowFiles = only.length ? ROW_FILES.filter((f) => only.includes(f)) : ROW_FILES;
-  const colFiles = only.length ? COLUMN_FILES.filter((f) => only.includes(f)) : COLUMN_FILES;
+  const rowFiles = only.length
+    ? ROW_FILES.filter((f) => only.includes(f))
+    : ROW_FILES;
+  const colFiles = only.length
+    ? COLUMN_FILES.filter((f) => only.includes(f))
+    : COLUMN_FILES;
 
-  console.log('📥 ייבוא נתוני מקור מהאקסלים למונגו');
+  console.log("📥 ייבוא נתוני מקור מהאקסלים למונגו");
   let rows = 0;
   for (const f of rowFiles) {
     try {
@@ -145,13 +162,16 @@ const run = async () => {
   }
 
   console.log(`\nסה"כ: ${rows} שורות, ${blocks} עמודות קורס`);
-  console.log('SourceRow docs:', await SourceRow.countDocuments());
-  console.log('SourceCourseBlock docs:', await SourceCourseBlock.countDocuments());
+  console.log("SourceRow docs:", await SourceRow.countDocuments());
+  console.log(
+    "SourceCourseBlock docs:",
+    await SourceCourseBlock.countDocuments(),
+  );
   await disconnectDB();
 };
 
 run().catch(async (err) => {
-  console.error('❌ הייבוא נכשל:', err.message);
+  console.error("❌ הייבוא נכשל:", err.message);
   try {
     await disconnectDB();
   } catch {

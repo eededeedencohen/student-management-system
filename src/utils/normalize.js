@@ -67,7 +67,7 @@ export const parseDate = (val, fallbackYear = 2026) => {
 
 /**
  * Canonical course families. Each entry: keywords (any match) -> canonical field name.
- * Order matters – more specific families ("NLP מאסטר") are checked before generic ("נלפ").
+ * Order matters - more specific families ("NLP מאסטר") are checked before generic ("נלפ").
  */
 const COURSE_FAMILIES = [
   { field: 'NLP מאסטר', keys: ['nlp מאסטר', 'נלפ מאסטר', 'נל"פ מאסטר', 'מאסטר nlp'] },

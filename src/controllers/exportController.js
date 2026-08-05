@@ -96,14 +96,18 @@ const buildRegFilter = (req, { onlyRegistrations = true } = {}) => {
   return filter;
 };
 
-/** תיאור הסינון שנבחר, לתת-הכותרת — שיהיה ברור מה בדיוק יש בקובץ. */
+/** תיאור הסינון שנבחר, לתת-הכותרת - שיהיה ברור מה בדיוק יש בקובץ. */
 const describeRegFilters = async (req) => {
   const parts = [];
   if (req.query.repId && !req.scopeRepId) parts.push("נציגה מסוימת");
   if (req.scopeRepId) parts.push("הנתונים שלך בלבד");
-  if (req.query.paymentStatus) parts.push(`סטטוס: ${statusLabel(req.query.paymentStatus)}`);
+  if (req.query.paymentStatus)
+    parts.push(`סטטוס: ${statusLabel(req.query.paymentStatus)}`);
   if (req.query.course) {
-    const c = await Course.findById(req.query.course).select("name").lean().catch(() => null);
+    const c = await Course.findById(req.query.course)
+      .select("name")
+      .lean()
+      .catch(() => null);
     if (c?.name) parts.push(`קורס: ${c.name}`);
   }
   if (req.query.from || req.query.to) {
@@ -111,7 +115,9 @@ const describeRegFilters = async (req) => {
       `טווח: ${req.query.from || "ההתחלה"} עד ${req.query.to || "היום"}`,
     );
   }
-  return parts.length ? `סינון: ${parts.join(" · ")}` : "ללא סינון — כל הנתונים";
+  return parts.length
+    ? `סינון: ${parts.join(" · ")}`
+    : "ללא סינון - כל הנתונים";
 };
 
 /* ------------------------------------------------------------------ */
@@ -165,7 +171,7 @@ export const exportRegistrations = asyncHandler(async (req, res) => {
 
   return sendStyledWorkbook(res, "רישומים", {
     sheetName: "רישומים",
-    title: "כל הרישומים — מכללת ספרא",
+    title: "כל הרישומים - מכללת ספרא",
     subtitle: `${await describeRegFilters(req)} · הופק: ${stamp()} · ${regs.length} רשומות`,
     columns: REG_COLUMNS,
     rows: regs.map(regRow),
@@ -189,7 +195,7 @@ export const exportDebtors = asyncHandler(async (req, res) => {
 
   return sendStyledWorkbook(res, "חייבים", {
     sheetName: "חייבים",
-    title: "חייבים — יתרות פתוחות לגבייה",
+    title: "חייבים - יתרות פתוחות לגבייה",
     subtitle: `כל רשומה עם חוב פתוח, ממוינת לפי מועד הגבייה הקרוב · הופק: ${stamp()} · ${regs.length} רשומות`,
     columns: [
       { header: "שם הנרשם/ת", key: "name" },
@@ -252,7 +258,7 @@ export const exportCourseRoster = asyncHandler(async (req, res) => {
     course?.name || req.query.courseField || decodeURIComponent(id);
   return sendStyledWorkbook(res, `רשימת משתתפים - ${baseName}`, {
     sheetName: "משתתפים",
-    title: `רשימת משתתפים — ${baseName}`,
+    title: `רשימת משתתפים - ${baseName}`,
     subtitle: `הופק: ${stamp()} · ${regs.length} משתתפים`,
     columns: [
       { header: "שם הנרשם/ת", key: "name" },
@@ -301,7 +307,7 @@ export const exportByMonth = asyncHandler(async (req, res) => {
   const monthLabel = `${m[2]}/${m[1]}`;
   return sendStyledWorkbook(res, `דוח חודשי ${m[1]}-${m[2]}`, {
     sheetName: `${m[1]}-${m[2]}`,
-    title: `דוח רישומים חודשי — ${monthLabel}`,
+    title: `דוח רישומים חודשי - ${monthLabel}`,
     subtitle: `כל העסקאות שנסגרו בחודש ${monthLabel} · הופק: ${stamp()} · ${regs.length} רשומות`,
     columns: REG_COLUMNS,
     rows: regs.map(regRow),

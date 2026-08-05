@@ -521,21 +521,27 @@ export const reps = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/dashboard/payment-tasks
- * "משימות גבייה" — התזכורות של הנציגה בדשבורד.
+ * "משימות גבייה" - התזכורות של הנציגה בדשבורד.
  *
  * הרקע: תשלום מתוזמן שהמועד שלו עבר מסומן כנגבה אוטומטית (utils/ernAutoConfirm.js),
- * כלומר המערכת מניחה שהכסף נכנס. לכן התזכורת החשובה היא לוודא שזה באמת קרה —
+ * כלומר המערכת מניחה שהכסף נכנס. לכן התזכורת החשובה היא לוודא שזה באמת קרה -
  * ואם לא, לבטל את הסימון או לרשום "הופסק". שלוש קבוצות:
  *
- *   verify  — אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
- *   due     — אמורים להיכנס עכשיו/בקרוב: לעקוב
- *   stopped — מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
+ *   verify  - אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
+ *   due     - אמורים להיכנס עכשיו/בקרוב: לעקוב
+ *   stopped - מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
  */
 export const paymentTasks = asyncHandler(async (req, res) => {
   const repId = resolveRepId(req);
   const now = nowFromReq(req);
-  const daysBack = Math.min(Math.max(parseInt(req.query.daysBack, 10) || 30, 1), 120);
-  const daysAhead = Math.min(Math.max(parseInt(req.query.daysAhead, 10) || 14, 1), 90);
+  const daysBack = Math.min(
+    Math.max(parseInt(req.query.daysBack, 10) || 30, 1),
+    120,
+  );
+  const daysAhead = Math.min(
+    Math.max(parseInt(req.query.daysAhead, 10) || 14, 1),
+    90,
+  );
   const since = new Date(now.getTime() - daysBack * 864e5);
   const until = new Date(now.getTime() + daysAhead * 864e5);
 
@@ -592,16 +598,20 @@ export const paymentTasks = asyncHandler(async (req, res) => {
   for (const r of rows) {
     const past = new Date(r.dueDate) <= now;
     if (r.paid) {
-      // רק אישורים אוטומטיים דורשים אימות; מה שנציגה כבר אישרה ידנית — סגור
-      if (isAuto(r)) verify.push({ ...base(r), confirmedAt: r.confirmedAt, auto: true });
+      // רק אישורים אוטומטיים דורשים אימות; מה שנציגה כבר אישרה ידנית - סגור
+      if (isAuto(r))
+        verify.push({ ...base(r), confirmedAt: r.confirmedAt, auto: true });
     } else if (past) {
-      stopped.push({ ...base(r), overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5) });
+      stopped.push({
+        ...base(r),
+        overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5),
+      });
     } else {
       due.push(base(r));
     }
   }
 
-  // תוכניות v1 (installmentPlan) לא מאושרות אוטומטית לעולם — תשלום שמועדו עבר
+  // תוכניות v1 (installmentPlan) לא מאושרות אוטומטית לעולם - תשלום שמועדו עבר
   // ועדיין 'pending' ממתין לאישור ידני של הנציגה.
   const planRows = await Registration.aggregate([
     { $match: { ...match, "installmentPlan.0": { $exists: true } } },

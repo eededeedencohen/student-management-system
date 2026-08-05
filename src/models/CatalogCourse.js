@@ -1,11 +1,11 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
 /**
- * CatalogCourse (קורס קטלוגי) — the FIXED course definition (e.g. NLP, הדרכת הורים):
+ * CatalogCourse (קורס קטלוגי) - the FIXED course definition (e.g. NLP, הדרכת הורים):
  * name, list price, default session count. Cohorts (CourseCohort) reference this.
- * Created from scratch by יקיר in the catalog admin page — deliberately a NEW
+ * Created from scratch by יקיר in the catalog admin page - deliberately a NEW
  * collection, separate from the legacy `Course` docs imported from the Excels
  * (those act as his "Excel entries" to be mapped onto catalog courses + cohorts).
  */
@@ -21,4 +21,4 @@ const catalogCourseSchema = new Schema(
 );
 
 export default mongoose.models.CatalogCourse ||
-  mongoose.model('CatalogCourse', catalogCourseSchema);
+  mongoose.model("CatalogCourse", catalogCourseSchema);

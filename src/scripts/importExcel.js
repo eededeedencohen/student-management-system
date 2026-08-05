@@ -200,7 +200,7 @@ const run = async () => {
   console.log("    data dir:", DATA_DIR);
   await connectDB();
 
-  // 1) wipe previous import (idempotent) – only rows we created
+  // 1) wipe previous import (idempotent) - only rows we created
   const del = await Promise.all([
     Registration.deleteMany({ sourceFile: { $exists: true } }),
     Course.deleteMany({ sourceFile: { $exists: true } }),
@@ -211,7 +211,7 @@ const run = async () => {
     `🧹  cleared prior import → reg:${del[0].deletedCount} course:${del[1].deletedCount} exp:${del[2].deletedCount} stud:${del[3].deletedCount}`,
   );
 
-  // 2) users (manager + reps) – upsert by name
+  // 2) users (manager + reps) - upsert by name
   const upsertUser = async (name, role, extra = {}) => {
     const doc = await User.findOneAndUpdate(
       { name },
@@ -585,7 +585,7 @@ const run = async () => {
     );
   };
 
-  // Moran columns (sheet גיליון1) – no ID, no VAT, no year in dates
+  // Moran columns (sheet גיליון1) - no ID, no VAT, no year in dates
   const MORAN_YEAR = Number(process.env.SEED_MORAN_YEAR) || 2025;
   console.log(
     `ℹ️  מורן: שנה משוערת לתאריכים = ${MORAN_YEAR} (ניתן לשנות עם SEED_MORAN_YEAR)`,
@@ -618,7 +618,7 @@ const run = async () => {
     },
   });
 
-  // Michal columns (sheet 924) – richer: ID, VAT, registeredBy, takanon, notes
+  // Michal columns (sheet 924) - richer: ID, VAT, registeredBy, takanon, notes
   processFile({
     file: "מיכל.xlsx",
     sheetName: "924",

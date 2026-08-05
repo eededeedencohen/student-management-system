@@ -1,10 +1,10 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
 const cellSchema = new Schema(
   {
-    v: { type: String, default: '' },
+    v: { type: String, default: "" },
     bg: { type: String, default: null },
     color: { type: String, default: null },
     bold: { type: Boolean, default: false },
@@ -15,7 +15,7 @@ const cellSchema = new Schema(
 );
 
 /**
- * SourceCourseBlock — יקיר's קורסים.xlsx is COLUMN-oriented: every course is a column
+ * SourceCourseBlock - יקיר's קורסים.xlsx is COLUMN-oriented: every course is a column
  * and the attribute labels ("שם הקורס", "מתאריך", "מרצה"…) sit in column A. This stores
  * one such column block, with styling, so the catalog page reads Mongo instead of
  * re-scanning the workbook on every request.
@@ -23,7 +23,7 @@ const cellSchema = new Schema(
 const sourceCourseBlockSchema = new Schema(
   {
     file: { type: String, required: true },
-    sheet: { type: String, default: '' },
+    sheet: { type: String, default: "" },
     column: { type: Number }, // Excel column index of this course
     startRow: { type: Number }, // the "שם הקורס" row this block starts at
     courseName: { type: String, required: true, index: true }, // the value of "שם הקורס"
@@ -45,4 +45,4 @@ const sourceCourseBlockSchema = new Schema(
 sourceCourseBlockSchema.index({ file: 1, courseName: 1 }, { unique: true });
 
 export default mongoose.models.SourceCourseBlock ||
-  mongoose.model('SourceCourseBlock', sourceCourseBlockSchema);
+  mongoose.model("SourceCourseBlock", sourceCourseBlockSchema);

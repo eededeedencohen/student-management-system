@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
@@ -8,7 +8,7 @@ const { Schema } = mongoose;
  */
 const cellSchema = new Schema(
   {
-    v: { type: String, default: '' }, // the displayed text
+    v: { type: String, default: "" }, // the displayed text
     bg: { type: String, default: null }, // fill color, "#RRGGBB"
     color: { type: String, default: null }, // font color
     bold: { type: Boolean, default: false },
@@ -19,7 +19,7 @@ const cellSchema = new Schema(
 );
 
 /**
- * SourceRow — one ROW of an original Excel workbook, WITH its styling, stored in Mongo.
+ * SourceRow - one ROW of an original Excel workbook, WITH its styling, stored in Mongo.
  *
  * Why: the editing pages need to show the reps exactly what they wrote (colors and all),
  * but parsing a 1000-row .xlsx per request is slow and depends on the files sitting next
@@ -32,7 +32,7 @@ const cellSchema = new Schema(
 const sourceRowSchema = new Schema(
   {
     file: { type: String, required: true, index: true }, // e.g. "מורן.xlsx"
-    sheet: { type: String, default: '' },
+    sheet: { type: String, default: "" },
     row: { type: Number, required: true }, // 1-based Excel row number
     isHeader: { type: Boolean, default: false }, // row 1 of the sheet
     cells: { type: [cellSchema], default: [] },
@@ -43,4 +43,5 @@ const sourceRowSchema = new Schema(
 // One document per file+sheet+row; the lookup is always by this triple.
 sourceRowSchema.index({ file: 1, sheet: 1, row: 1 }, { unique: true });
 
-export default mongoose.models.SourceRow || mongoose.model('SourceRow', sourceRowSchema);
+export default mongoose.models.SourceRow ||
+  mongoose.model("SourceRow", sourceRowSchema);

@@ -493,8 +493,8 @@ export const update = asyncHandler(async (req, res) => {
  * PUT /api/registrations/:id/payment-plan  (v2)
  * החלפה מלאה של תוכנית התשלומים של עסקה קיימת, באותם חוקים כמו יצירת עסקה:
  * סך כל התשלומים חייב להשתוות למחיר העסקה (בניכוי הנחה/מחילה שנרשמה כ-writeOff).
- * תשלום שכבר סומן כשולם נעול — סכום/אמצעי/תאריך אינם ניתנים לשינוי, ומחיקתו
- * דורשת אישור מפורש (confirmRemovePaid) — כך כסף שנגבה לא "נעלם" בטעות.
+ * תשלום שכבר סומן כשולם נעול - סכום/אמצעי/תאריך אינם ניתנים לשינוי, ומחיקתו
+ * דורשת אישור מפורש (confirmRemovePaid) - כך כסף שנגבה לא "נעלם" בטעות.
  */
 export const updatePaymentPlan = asyncHandler(async (req, res) => {
   const reg = await Registration.findById(req.params.id);
@@ -504,7 +504,7 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
   }
   if (reg.schemaVersion !== 2) {
     throw ApiError.badRequest(
-      "עריכת תוכנית תשלומים זמינה לעסקאות מהפורמט החדש בלבד — עסקה ישנה משלימים קודם בעמוד עריכת הנתונים",
+      "עריכת תוכנית תשלומים זמינה לעסקאות מהפורמט החדש בלבד - עסקה ישנה משלימים קודם בעמוד עריכת הנתונים",
     );
   }
 
@@ -521,7 +521,7 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
   const incoming = Array.isArray(req.body?.payments) ? req.body.payments : null;
   if (!incoming || incoming.length === 0) {
     throw ApiError.badRequest(
-      "נדרשת רשימת תשלומים — כל עוד העסקה קיימת התוכנית חייבת לכסות את מלוא הסכום",
+      "נדרשת רשימת תשלומים - כל עוד העסקה קיימת התוכנית חייבת לכסות את מלוא הסכום",
     );
   }
 
@@ -572,14 +572,14 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
     const prev = p._id ? existingById.get(String(p._id)) : null;
     if (p._id && !prev) {
       throw ApiError.badRequest(
-        `שורה ${rowNo}: התשלום המקורי כבר לא קיים בעסקה — רענן את העמוד ונסה שוב`,
+        `שורה ${rowNo}: התשלום המקורי כבר לא קיים בעסקה - רענן את העמוד ונסה שוב`,
       );
     }
     if (prev) seenIds.add(String(prev._id));
 
     if (prev && prev.paid && paid) {
       // תשלום ששולם: כשהערכים לא השתנו נשמר האישור המקורי (מי אישר ומתי).
-      // שינוי סכום/אמצעי/תאריך אפשרי רק אחרי פתיחת הנעילה בממשק — ואז האישור
+      // שינוי סכום/אמצעי/תאריך אפשרי רק אחרי פתיחת הנעילה בממשק - ואז האישור
       // נחתם מחדש על שם העורך הנוכחי, כדי שתמיד יהיה ברור מי ערב לכסף הזה.
       const sameAmount = Math.abs((prev.amount || 0) - amount) < 0.01;
       const sameMethod = (prev.method || "") === method;
@@ -637,7 +637,7 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
   if (removedPaid.length > 0 && req.body?.confirmRemovePaid !== true) {
     const total = removedPaid.reduce((s, p) => s + (p.amount || 0), 0);
     throw ApiError.badRequest(
-      `הרשימה מוחקת ${removedPaid.length} תשלומים שכבר סומנו כשולמו (${Math.round(total).toLocaleString("he-IL")} ₪) — נדרש אישור מפורש למחיקה`,
+      `הרשימה מוחקת ${removedPaid.length} תשלומים שכבר סומנו כשולמו (${Math.round(total).toLocaleString("he-IL")} ₪) - נדרש אישור מפורש למחיקה`,
     );
   }
 
@@ -648,7 +648,7 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
     throw ApiError.badRequest(
       `סך התשלומים (${Math.round(sum).toLocaleString("he-IL")} ₪) חייב להשתוות לסכום העסקה (${Math.round(effTarget).toLocaleString("he-IL")} ₪)` +
         (writeOff > 0
-          ? ` — המחיר בניכוי הנחה/מחילה של ${Math.round(writeOff).toLocaleString("he-IL")} ₪`
+          ? ` - המחיר בניכוי הנחה/מחילה של ${Math.round(writeOff).toLocaleString("he-IL")} ₪`
           : ""),
     );
   }
@@ -921,7 +921,8 @@ export const setPaymentReceipt = asyncHandler(async (req, res) => {
     p.receiptImage = true;
   }
   // שליחת reference (גם ריק) מעדכנת את המספר; אי-שליחה משאירה את הקיים
-  if ("reference" in (req.body || {})) p.receiptReference = reference || undefined;
+  if ("reference" in (req.body || {}))
+    p.receiptReference = reference || undefined;
   p.receiptUploadedAt = new Date();
   p.receiptUploadedByName = uname;
   await reg.save();
@@ -988,10 +989,12 @@ export const remove = asyncHandler(async (req, res) => {
 /**
  * GET /api/registrations/:id/contract.pdf
  * מוריד את עותק ה-PDF החתום שנשמר לעסקה (נשמר אוטומטית אחרי חתימה).
- * נציגה יכולה להוריד רק מעסקאות שלה — כמו בצפייה ברישום.
+ * נציגה יכולה להוריד רק מעסקאות שלה - כמו בצפייה ברישום.
  */
 export const downloadContractPdf = asyncHandler(async (req, res) => {
-  const reg = await Registration.findById(req.params.id).select("rep contract studentName");
+  const reg = await Registration.findById(req.params.id).select(
+    "rep contract studentName",
+  );
   if (!reg) throw ApiError.notFound("הרישום לא נמצא");
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
     throw ApiError.forbidden("אין הרשאה לצפות ברישום זה");
@@ -999,7 +1002,9 @@ export const downloadContractPdf = asyncHandler(async (req, res) => {
   const { default: ContractPdf } = await import("../models/ContractPdf.js");
   const doc = await ContractPdf.findOne({ registration: reg._id }).lean();
   if (!doc?.pdfBase64) {
-    throw ApiError.notFound("אין עותק PDF שמור לעסקה זו (נשמר אוטומטית בחתימות חדשות)");
+    throw ApiError.notFound(
+      "אין עותק PDF שמור לעסקה זו (נשמר אוטומטית בחתימות חדשות)",
+    );
   }
   const filename = doc.filename || `תקנון-${reg.studentName || "חוזה"}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
@@ -1013,7 +1018,7 @@ export const downloadContractPdf = asyncHandler(async (req, res) => {
 /**
  * POST /api/registrations/:id/contract
  * יצירת חוזה לעסקה קיימת (עסקאות ישנות שנוצרו בלי חוזה): טוקן + סטטוס pending.
- * אידמפוטנטי — אם כבר קיים חוזה, מחזיר את העסקה כמו שהיא. משם אפשר לחתום
+ * אידמפוטנטי - אם כבר קיים חוזה, מחזיר את העסקה כמו שהיא. משם אפשר לחתום
  * דיגיטלית (קישור), להוריד PDF להדפסה, או להעלות עותק חתום סרוק.
  */
 export const createContract = asyncHandler(async (req, res) => {
@@ -1034,7 +1039,9 @@ export const createContract = asyncHandler(async (req, res) => {
     await reg.save();
   }
   const { default: ContractPdf } = await import("../models/ContractPdf.js");
-  const pdfStored = Boolean(await ContractPdf.exists({ registration: reg._id }));
+  const pdfStored = Boolean(
+    await ContractPdf.exists({ registration: reg._id }),
+  );
   res.status(201).json({
     success: true,
     data: { ...reg.toObject(), contractPdfStored: pdfStored },
@@ -1044,7 +1051,7 @@ export const createContract = asyncHandler(async (req, res) => {
 /**
  * POST /api/registrations/:id/contract/upload-signed
  * העלאת חוזה חתום ידנית (סריקה/צילום שהומרו ל-PDF בצד הלקוח). שומר את הקובץ
- * כעותק הרשמי (ContractPdf, פעם אחת בלבד) ומסמן את החוזה כחתום — בדיוק כמו
+ * כעותק הרשמי (ContractPdf, פעם אחת בלבד) ומסמן את החוזה כחתום - בדיוק כמו
  * חתימה דיגיטלית: status=signed + checklist.signedTakanon.
  */
 export const uploadSignedContract = asyncHandler(async (req, res) => {
@@ -1061,15 +1068,14 @@ export const uploadSignedContract = asyncHandler(async (req, res) => {
     throw ApiError.badRequest("קובץ ה-PDF חסר או פגום");
   if (pdfBase64.length > 14_000_000)
     throw ApiError.badRequest("קובץ ה-PDF גדול מדי");
-  // חייב להיות PDF אמיתי ("%PDF" = "JVBER" ב-base64) — לא בייטים שרירותיים
+  // חייב להיות PDF אמיתי ("%PDF" = "JVBER" ב-base64) - לא בייטים שרירותיים
   if (!pdfBase64.startsWith("JVBER"))
     throw ApiError.badRequest("הקובץ אינו PDF תקין");
 
   const { default: ContractPdf } = await import("../models/ContractPdf.js");
   if (reg.contract?.status === "signed") {
     const exists = await ContractPdf.exists({ registration: reg._id });
-    if (exists)
-      throw ApiError.badRequest("החוזה כבר חתום וקיים לו עותק שמור");
+    if (exists) throw ApiError.badRequest("החוזה כבר חתום וקיים לו עותק שמור");
   }
 
   // עסקה בלי חוזה: נוצר חוזה במקום (ההעלאה עצמה היא החתימה)
@@ -1088,7 +1094,7 @@ export const uploadSignedContract = asyncHandler(async (req, res) => {
   reg.contract.signerName =
     cleanStr(req.body?.signerName) || reg.studentName || "";
   reg.contract.signedVia = "upload";
-  // כמו בחתימה דיגיטלית — סוגר אוטומטית את "נחתם תקנון" בצ'ק-ליסט
+  // כמו בחתימה דיגיטלית - סוגר אוטומטית את "נחתם תקנון" בצ'ק-ליסט
   reg.checklist = {
     ...(reg.checklist?.toObject?.() || reg.checklist || {}),
     signedTakanon: true,
@@ -1100,7 +1106,7 @@ export const uploadSignedContract = asyncHandler(async (req, res) => {
   });
 
   const filename = `תקנון-מכללת-ספרא-${reg.studentName || "חוזה"}.pdf`;
-  // $setOnInsert — העותק הראשון שנשמר הוא הקובע; אין דריסה (מניעת זיוף)
+  // $setOnInsert - העותק הראשון שנשמר הוא הקובע; אין דריסה (מניעת זיוף)
   await ContractPdf.findOneAndUpdate(
     { registration: reg._id },
     {

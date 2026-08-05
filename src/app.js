@@ -26,7 +26,7 @@ import { notFound, errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
-// CORS – optionally restrict to CLIENT_ORIGIN(s)
+// CORS - optionally restrict to CLIENT_ORIGIN(s)
 const origins = (process.env.CLIENT_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use(cors(origins.length ? { origin: origins, credentials: true } : { origin: true, credentials: true }));
 

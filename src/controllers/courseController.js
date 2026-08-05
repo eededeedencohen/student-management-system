@@ -108,7 +108,7 @@ async function computeEnrollment(req) {
  */
 /**
  * תיחום כספי לנציגה: סכומי הקורס (מכירות/נגבה/יתרה) מחושבים עבורה רק מהעסקאות
- * שלה — היא לא מקבלת אגרגטים של כלל החברה (מהם אפשר לגזור מכירות של קולגות).
+ * שלה - היא לא מקבלת אגרגטים של כלל החברה (מהם אפשר לגזור מכירות של קולגות).
  * מנהלים מקבלים את הסכום המלא. מוחל על list / gantt / get.
  */
 const repMoneyDeals = (req, dealsOfCourse) =>
@@ -126,8 +126,10 @@ export const list = asyncHandler(async (req, res) => {
   const [data, enrollment, cohortLinks] = await Promise.all([
     Course.find(filter).sort({ startDate: 1 }).lean(),
     computeEnrollment(req),
-    // אילו רשומות מקושרות למחזור (החדש) — עריכה שלהן נפתחת בטופס המחזור
-    CourseCohort.find({ sourceCourse: { $ne: null } }).select("sourceCourse").lean(),
+    // אילו רשומות מקושרות למחזור (החדש) - עריכה שלהן נפתחת בטופס המחזור
+    CourseCohort.find({ sourceCourse: { $ne: null } })
+      .select("sourceCourse")
+      .lean(),
   ]);
   const cohortBySource = new Map(
     cohortLinks.map((c) => [String(c.sourceCourse), String(c._id)]),
@@ -255,11 +257,15 @@ export const update = asyncHandler(async (req, res) => {
 export const remove = asyncHandler(async (req, res) => {
   // רשומה שמקושרת למחזור: מוחקים גם את המחזור (אחרת הוא נשאר יתום ומופיע
   // בעמוד המחזורים), אבל רק אם אין עסקאות משויכות אליו.
-  const cohort = await CourseCohort.findOne({ sourceCourse: req.params.id }).lean();
+  const cohort = await CourseCohort.findOne({
+    sourceCourse: req.params.id,
+  }).lean();
   if (cohort) {
     const inUse = await Registration.exists({ cohort: cohort._id });
     if (inUse) {
-      throw ApiError.badRequest("לא ניתן למחוק — יש עסקאות המשויכות למחזור של הקורס");
+      throw ApiError.badRequest(
+        "לא ניתן למחוק - יש עסקאות המשויכות למחזור של הקורס",
+      );
     }
     await CourseCohort.deleteOne({ _id: cohort._id });
   }

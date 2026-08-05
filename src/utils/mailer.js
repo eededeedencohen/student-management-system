@@ -1,6 +1,10 @@
-import EmailAccount from '../models/EmailAccount.js';
-import ApiError from './ApiError.js';
-import { refreshAccessToken, buildRawMessage, sendGmailMessage } from './google.js';
+import EmailAccount from "../models/EmailAccount.js";
+import ApiError from "./ApiError.js";
+import {
+  refreshAccessToken,
+  buildRawMessage,
+  sendGmailMessage,
+} from "./google.js";
 
 /**
  * Server-side mailer over the single connected Google account (see emailController /
@@ -8,24 +12,29 @@ import { refreshAccessToken, buildRawMessage, sendGmailMessage } from './google.
  * and automatic sends (e.g. the signed-contract email) share one code path.
  */
 
-const ACCOUNT_KEY = 'primary';
-const defaultFromName = () => process.env.EMAIL_FROM_NAME || 'מכללת ספרא';
+const ACCOUNT_KEY = "primary";
+const defaultFromName = () => process.env.EMAIL_FROM_NAME || "מכללת ספרא";
 
 /** Load the stored account WITH its (select:false) tokens, or null if none connected. */
 export const loadAccountWithTokens = () =>
-  EmailAccount.findOne({ key: ACCOUNT_KEY }).select('+accessToken +refreshToken');
+  EmailAccount.findOne({ key: ACCOUNT_KEY }).select(
+    "+accessToken +refreshToken",
+  );
 
 /**
  * Return a valid access token for `acct`, refreshing when the stored one is expired
- * (or when `force` is set — used to recover from a 401 on a not-yet-expired token).
+ * (or when `force` is set - used to recover from a 401 on a not-yet-expired token).
  * Errors are tagged `fatalAuth` so batch callers can stop instead of retrying per item.
  */
 export async function ensureAccessToken(acct, { force = false } = {}) {
   const stillValid =
-    !force && acct.accessToken && acct.expiryDate && new Date(acct.expiryDate).getTime() > Date.now() + 60_000;
+    !force &&
+    acct.accessToken &&
+    acct.expiryDate &&
+    new Date(acct.expiryDate).getTime() > Date.now() + 60_000;
   if (stillValid) return acct.accessToken;
   if (!acct.refreshToken) {
-    const e = ApiError.badRequest('החיבור ל-Google פג. יש להתחבר מחדש.');
+    const e = ApiError.badRequest("החיבור ל-Google פג. יש להתחבר מחדש.");
     e.fatalAuth = true;
     throw e;
   }
@@ -33,13 +42,15 @@ export async function ensureAccessToken(acct, { force = false } = {}) {
   try {
     refreshed = await refreshAccessToken(acct.refreshToken);
   } catch (err) {
-    if (err.code === 'invalid_grant') {
+    if (err.code === "invalid_grant") {
       await EmailAccount.deleteOne({ key: ACCOUNT_KEY });
-      const e = ApiError.badRequest('החיבור ל-Google בוטל. יש להתחבר מחדש.');
+      const e = ApiError.badRequest("החיבור ל-Google בוטל. יש להתחבר מחדש.");
       e.fatalAuth = true;
       throw e;
     }
-    const e = ApiError.badRequest(err.message || 'רענון ההרשאה מול Google נכשל');
+    const e = ApiError.badRequest(
+      err.message || "רענון ההרשאה מול Google נכשל",
+    );
     e.fatalAuth = true;
     throw e;
   }
@@ -61,7 +72,7 @@ export async function ensureAccessToken(acct, { force = false } = {}) {
 export async function sendOneEmail(opts) {
   const acct = await loadAccountWithTokens();
   if (!acct || !acct.refreshToken) {
-    const e = ApiError.badRequest('לא מחובר חשבון Google לשליחת מיילים');
+    const e = ApiError.badRequest("לא מחובר חשבון Google לשליחת מיילים");
     e.notConnected = true;
     throw e;
   }

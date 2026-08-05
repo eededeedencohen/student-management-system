@@ -1,15 +1,15 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
 /**
  * The single Google account connected for outbound email (עדן connects it once).
  * A singleton: one document keyed `key:'primary'`. Tokens are `select:false` so they
- * are never returned by accident — only the status endpoint's whitelisted fields go out.
+ * are never returned by accident - only the status endpoint's whitelisted fields go out.
  */
 const emailAccountSchema = new Schema(
   {
-    key: { type: String, default: 'primary', unique: true, index: true },
+    key: { type: String, default: "primary", unique: true, index: true },
     email: { type: String, trim: true, lowercase: true }, // the connected Gmail address
     accessToken: { type: String, select: false },
     refreshToken: { type: String, select: false },
@@ -23,4 +23,4 @@ const emailAccountSchema = new Schema(
 );
 
 export default mongoose.models.EmailAccount ||
-  mongoose.model('EmailAccount', emailAccountSchema);
+  mongoose.model("EmailAccount", emailAccountSchema);

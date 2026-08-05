@@ -71,7 +71,7 @@ export const list = asyncHandler(async (req, res) => {
     {
       // Only true sales count toward the money totals - collection follow-ups are
       // already folded into their parent deal (counting them would double-count).
-      // נציגה: רק העסקאות שלה נספרות — הסכומים שהיא רואה הם הכסף שלה בלבד.
+      // נציגה: רק העסקאות שלה נספרות - הסכומים שהיא רואה הם הכסף שלה בלבד.
       $addFields: {
         deals: {
           $filter: {
@@ -80,9 +80,18 @@ export const list = asyncHandler(async (req, res) => {
             cond: {
               $and: [
                 { $eq: ["$$r.recordType", "registration"] },
-                ...(sinceOf(req) ? [{ $gte: ["$$r.dealDate", sinceOf(req)] }] : []),
+                ...(sinceOf(req)
+                  ? [{ $gte: ["$$r.dealDate", sinceOf(req)] }]
+                  : []),
                 ...(req.scopeRepId
-                  ? [{ $eq: ["$$r.rep", new mongoose.Types.ObjectId(req.scopeRepId)] }]
+                  ? [
+                      {
+                        $eq: [
+                          "$$r.rep",
+                          new mongoose.Types.ObjectId(req.scopeRepId),
+                        ],
+                      },
+                    ]
                   : []),
               ],
             },
@@ -197,7 +206,7 @@ export const getOne = asyncHandler(async (req, res) => {
   if (!student) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
 
   // נציגה: גישה רק לתלמיד/ה שיש לה עסקה איתו/ה, ורואה רק את העסקאות שלה.
-  // 404 (ולא 403) — כדי לא לאשר לנציגה שהתלמיד/ה בכלל קיים/ת במערכת.
+  // 404 (ולא 403) - כדי לא לאשר לנציגה שהתלמיד/ה בכלל קיים/ת במערכת.
   if (req.scopeRepId) {
     const owns = await Registration.exists({
       student: student._id,
@@ -221,7 +230,7 @@ export const getOne = asyncHandler(async (req, res) => {
       })
     : registrations.length;
 
-  // לאילו עסקאות שמור עותק PDF חתום — מציג את כפתור ההורדה רק כשבאמת יש מה להוריד
+  // לאילו עסקאות שמור עותק PDF חתום - מציג את כפתור ההורדה רק כשבאמת יש מה להוריד
   const { default: ContractPdf } = await import("../models/ContractPdf.js");
   const pdfDocs = await ContractPdf.find({
     registration: { $in: registrations.map((r) => r._id) },
@@ -234,7 +243,10 @@ export const getOne = asyncHandler(async (req, res) => {
     contractPdfStored: withPdf.has(String(r._id)),
   }));
 
-  res.json({ success: true, data: { student, registrations: regsOut, regsTotal } });
+  res.json({
+    success: true,
+    data: { student, registrations: regsOut, regsTotal },
+  });
 });
 
 /**
@@ -325,7 +337,7 @@ export const update = asyncHandler(async (req, res) => {
   Object.assign(student, updates);
 
   // עקביות מין↔פנייה (אותו כלל כמו בעריכת נתונים ובטופס החיצוני): השדה שהשתנה
-  // מוביל — גבר ⇒ Mr.; אישה עם Mr. ⇒ הפנייה מתרוקנת; Mr. ⇒ גבר; Ms./Mrs. ⇒ אישה.
+  // מוביל - גבר ⇒ Mr.; אישה עם Mr. ⇒ הפנייה מתרוקנת; Mr. ⇒ גבר; Ms./Mrs. ⇒ אישה.
   const genderChanged = (student.gender || null) !== (prevGender || null);
   const titleChanged = (student.title || null) !== (prevTitle || null);
   if (genderChanged || !titleChanged) {
