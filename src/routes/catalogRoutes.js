@@ -31,6 +31,7 @@ router.delete("/cohorts/:id", ctrl.deleteCohort);
 
 // רשומות האקסל של יקיר (למיפוי)
 router.get("/source-courses", ctrl.listSourceCourses);
+router.get("/source-courses/:id/deals", ctrl.listSourceCourseDeals);
 router.get("/source-courses/:id/source", ctrl.sourceCourseStyled);
 
 export default router;

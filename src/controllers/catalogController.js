@@ -547,6 +547,48 @@ export const listSourceCourses = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/catalog/source-courses/:id/deals
+ * העסקאות של רשומת מקור אחת - לפי אותה התאמה בדיוק כמו ספירת dealsCount
+ * (FK ישיר course/coursesAll, או ההתאמה ההיוריסטית לרשומות בלי FK). משמש את
+ * מודל "עסקאות" בעמוד הקטלוג; לחיצה על עסקה מנווטת אליה בעמוד עריכת הנתונים.
+ */
+export const listSourceCourseDeals = asyncHandler(async (req, res) => {
+  const target = String(req.params.id);
+  const exists = await Course.exists({ _id: target });
+  if (!exists) throw ApiError.notFound("רשומת הקורס לא נמצאה");
+
+  const courses = await Course.find({}).lean();
+  const deals = await Registration.find({ recordType: "registration" })
+    .select(
+      "course coursesAll courseRaw courseField cohortLabel dealDate studentName repName totalAmount review.status",
+    )
+    .lean();
+  const index = buildCourseIndex(courses);
+
+  const out = [];
+  for (const d of deals) {
+    let ids = [];
+    if (d.course) {
+      ids = [String(d.course), ...(d.coursesAll || []).map(String)];
+    } else {
+      const m = matchDealToCourse(d, index);
+      if (m?.courseId) ids = [String(m.courseId)];
+    }
+    if (!ids.includes(target)) continue;
+    out.push({
+      id: String(d._id),
+      studentName: d.studentName || "",
+      repName: d.repName || "",
+      dealDate: d.dealDate || null,
+      totalAmount: d.totalAmount || 0,
+      reviewed: d.review?.status === "done",
+    });
+  }
+  out.sort((a, b) => new Date(b.dealDate || 0) - new Date(a.dealDate || 0));
+  res.json({ success: true, data: out });
+});
+
+/**
  * GET /api/catalog/source-courses/:id/source
  * The ORIGINAL column from קורסים.xlsx for this course, with יקיר's own colors.
  */

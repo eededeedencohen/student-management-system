@@ -293,6 +293,7 @@ async function buildDeals(filter) {
       studentId: student ? String(student._id) : null,
       studentName: reg.studentName || "",
       studentNumber: student?.studentNumber || null,
+      repName: reg.repName || "",
       courseRaw: reg.courseRaw || "",
       cohortLabel: reg.cohortLabel || "",
       cohort: reg.cohort ? String(reg.cohort) : null,
