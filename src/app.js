@@ -21,6 +21,7 @@ import externalRoutes from './routes/externalRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
 import dataReviewRoutes from './routes/dataReviewRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
+import quoteRoutes from './routes/quoteRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 
@@ -64,6 +65,7 @@ app.use('/api/export', exportRoutes);
 app.use('/api/emails', emailRoutes); // שליחת מיילים דרך Gmail (מנהל-העל בלבד)
 app.use('/api/data-review', dataReviewRoutes); // עריכת נתונים ישנים (לכל נציגה שלה)
 app.use('/api/catalog', catalogRoutes); // קורסים/מחזורים/מרצים (יקיר - מנהל)
+app.use('/api/quotes', quoteRoutes); // הצעות מחיר שמורות + טמפלטים (כל משתמש)
 app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
 
 // --- serve the built client (single-server mode) ---------------------------
