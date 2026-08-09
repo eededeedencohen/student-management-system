@@ -17,6 +17,9 @@ const paymentSchema = new Schema(
     methodCategory: { type: String }, // credit | transfer | cash | ern | financing | combined | other
     dueDate: { type: Date }, // v2: scheduled date (past or future)
     paid: { type: Boolean, default: false }, // v2: has it been collected?
+    // בוטל במסגרת ביטול עסקה: לא ייגבה (ידנית או אוטומטית) ולא נספר ביתרה.
+    // נשמר ברשומה (ולא נמחק) כדי שההיסטוריה והחוזה יישארו שלמים.
+    canceled: { type: Boolean },
     confirmedBy: { type: Schema.Types.ObjectId, ref: "User" }, // who pressed "סמן כשולם"
     confirmedByName: { type: String },
     confirmedAt: { type: Date },
@@ -45,6 +48,34 @@ const noteEntrySchema = new Schema(
     byName: { type: String },
   },
   { _id: true },
+);
+
+// החזר מתוכנן ללקוח במסגרת ביטול עסקה: כמה, מתי, והאם כבר בוצע.
+// מופיע בתזרים כהוצאה צפויה בתאריך היעד עד שמסומן refunded.
+const refundSchema = new Schema(
+  {
+    amount: { type: Number, default: 0 },
+    dueDate: { type: Date }, // מתי להחזיר
+    note: { type: String, trim: true },
+    sourcePaymentId: { type: String }, // התשלום ששולם שממנו נגזר ההחזר (אם רלוונטי)
+    refunded: { type: Boolean, default: false }, // ההחזר בוצע בפועל
+    refundedAt: { type: Date },
+    refundedByName: { type: String },
+  },
+  { _id: true },
+);
+
+// ביטול עסקה: מתי, מי, למה, ואילו החזרים נקבעו. קיום canceledAt הוא המקור
+// היחיד לאמת - הוא זה שמפעיל את חוקי הביטול ב-recompute ובתזרים.
+const cancellationSchema = new Schema(
+  {
+    canceledAt: { type: Date },
+    by: { type: Schema.Types.ObjectId, ref: "User" },
+    byName: { type: String },
+    note: { type: String, trim: true }, // הערת הביטול (חובה בביטול)
+    refunds: { type: [refundSchema], default: [] },
+  },
+  { _id: false },
 );
 
 const checklistSchema = new Schema(
@@ -163,6 +194,9 @@ const registrationSchema = new Schema(
     // --- חוזה דיגיטלי (טופס חיצוני) ---
     contract: { type: contractSchema },
 
+    // --- ביטול עסקה (recordType הופך ל-cancelled; ניתן לשחזור) ---
+    cancellation: { type: cancellationSchema },
+
     // לוח תשלומים צפוי (פריסת אשראי/ERN) - נוצר מהפירוט הטקסטואלי + שורות "N/M".
     installmentPlan: { type: [installmentSchema], default: [] },
 
@@ -212,7 +246,9 @@ registrationSchema.methods.recompute = function recompute() {
 
   // --- v2: total & status are DERIVED from the unified payments list ---
   if (this.schemaVersion === 2) {
-    const pays = this.payments || [];
+    const isCancelled = Boolean(this.cancellation?.canceledAt);
+    // תשלום שבוטל בביטול עסקה אינו חלק מהחשבון - לא בגבייה ולא ביתרה
+    const pays = (this.payments || []).filter((p) => !p.canceled);
     const paymentsSum = pays.reduce((s, p) => s + (p.amount || 0), 0);
     const collected = pays.reduce(
       (s, p) => s + (p.paid ? p.amount || 0 : 0),
@@ -220,7 +256,13 @@ registrationSchema.methods.recompute = function recompute() {
     );
     // explicit dealPrice (JSON import) wins - the recorded payments may not cover the
     // whole deal (missing money / future plan only noted in text); else derive from payments.
-    const total = this.dealPrice > 0 ? this.dealPrice : paymentsSum;
+    // עסקה מבוטלת: הסכום האפקטיבי הוא מה שנשאר בתוקף (שולם + מה שסוכם שעוד
+    // ייגבה), לא המחיר המקורי - כך היתרה משקפת רק כסף שבאמת ייגבה.
+    const total = isCancelled
+      ? paymentsSum
+      : this.dealPrice > 0
+        ? this.dealPrice
+        : paymentsSum;
     this.totalAmount = total; // derived-and-cached so existing queries/aggregations keep working
     this.totalPaid = collected;
     // writeOff = residual forgiven as a discount (or a cancelled deal's balance) - it
@@ -239,12 +281,14 @@ registrationSchema.methods.recompute = function recompute() {
     return this;
   }
 
-  // --- v1 legacy (unchanged) ---
+  // --- v1 legacy ---
   const paid = (this.payments || []).reduce((s, p) => s + (p.amount || 0), 0);
   this.totalPaid = paid || this.advancePaid || 0;
   // Outstanding = total − collected when the deal total is known; otherwise fall back
   // to the (clean) balance columns. Mirrors the import logic in importExcel.js.
-  if (this.totalAmount > 0)
+  if (this.cancellation?.canceledAt)
+    this.outstanding = 0; // עסקה ישנה שבוטלה: אין יתרה לגבייה (החזרים ב-cancellation)
+  else if (this.totalAmount > 0)
     this.outstanding = Math.max(this.totalAmount - this.totalPaid, 0);
   else if (this.finalBalance > 0) this.outstanding = this.finalBalance;
   else this.outstanding = this.balanceDue > 0 ? this.balanceDue : 0;

@@ -105,6 +105,17 @@ function exVatIncome(outstanding, reg) {
 // monthly schedule for them; their outstanding goes into a separate "unscheduled" pool.
 const SCHEDULED_CATEGORIES = new Set(["credit", "ern"]);
 
+/** עסקאות שעדיין גובים מהן: רישומים ומעקבי גבייה, וגם עסקה שבוטלה דרך חלון
+ *  הביטול (cancellation.canceledAt) - שם ייתכן שסוכם שחלק מהתשלומים ימשיכו
+ *  להיגבות, וה-outstanding שלה כבר משקף רק אותם. עסקאות cancelled ישנות
+ *  (ייבוא) לא נכללות - אין להן cancellation מפורש. */
+const receivableTypes = () => ({
+  $or: [
+    { recordType: { $in: ["registration", "collection_followup"] } },
+    { recordType: "cancelled", "cancellation.canceledAt": { $exists: true } },
+  ],
+});
+
 /** Determine the anchor month-start for a registration's income, clamped so we
  *  never place expected income before the first forecast month (A3). */
 function incomeAnchor(reg, firstMonthStart) {
@@ -137,7 +148,7 @@ function attributeIncome(
   if (reg.schemaVersion === 2) {
     let scheduledSum = 0;
     for (const p of reg.payments || []) {
-      if (p.paid) continue;
+      if (p.paid || p.canceled) continue; // בוטל בביטול עסקה - לא ייגבה
       const amt = Number(p.amount) || 0;
       if (amt <= 0) continue;
       scheduledSum += amt;
@@ -184,36 +195,85 @@ function attributeIncome(
   }
 }
 
-/** עסקאות מבוטלות שנגבה עליהן כסף והוא לא הוסדר (לא הועבר/לא ויתרו עליו) - החזר ממתין. */
+/** עסקאות מבוטלות שנגבה עליהן כסף והוא לא הוסדר (לא הועבר/לא ויתרו עליו) - החזר ממתין.
+ *  עסקה שבוטלה דרך חלון הביטול נושאת החזרים מפורשים (cancellation.refunds) - שם
+ *  הסכום הוא סך ההחזרים שטרם בוצעו (0 = הכול הוסדר). עסקאות מהייבוא הישן, ללא
+ *  cancellation, ממשיכות בניחוש מטקסט ההערות. */
 async function findRefundsDue(req) {
   const filter = { recordType: "cancelled", totalPaid: { $gt: 0 } };
   applySince(req, filter);
   const rows = await Registration.find(filter)
     .select(
-      "externalId student studentName courseRaw courseField repName dealDate totalPaid noteEntries notes",
+      "externalId student studentName courseRaw courseField repName dealDate totalPaid noteEntries notes cancellation",
     )
     .lean();
   const SETTLED = /עבר[ה]? ל|הועבר|לא ביקש|ויתר|קוזז|הוחזר/;
-  return rows
-    .filter(
-      (r) =>
-        !SETTLED.test(
-          [r.notes, ...(r.noteEntries || []).map((n) => n.text)].join(" "),
-        ),
-    )
-    .map((r) => ({
+  const out = [];
+  for (const r of rows) {
+    const base = {
       student: r.student,
       studentName: r.studentName,
       externalId: r.externalId,
       course: r.courseRaw || r.courseField || "",
       repName: r.repName || "",
       dealDate: r.dealDate,
+    };
+    if (r.cancellation?.canceledAt) {
+      const pending = (r.cancellation.refunds || [])
+        .filter((x) => !x.refunded)
+        .reduce((a, x) => a + (x.amount || 0), 0);
+      if (pending > 0.5) {
+        out.push({
+          ...base,
+          amount: pending,
+          note: r.cancellation.note || "עסקה בוטלה",
+        });
+      }
+      continue;
+    }
+    if (
+      SETTLED.test(
+        [r.notes, ...(r.noteEntries || []).map((n) => n.text)].join(" "),
+      )
+    )
+      continue;
+    out.push({
+      ...base,
       amount: r.totalPaid,
       note:
         (r.noteEntries || [])
           .map((n) => n.text)
           .find((t) => /ביטול|לבדיקה/.test(t || "")) || "עסקה בוטלה",
-    }));
+    });
+  }
+  return out;
+}
+
+/** החזרים ממתינים מביטולי עסקה מפורשים, לשיבוץ בתחזית כהוצאה יוצאת.
+ *  מחזיר [{studentName, amount, dueDate, note}] - רק החזרים שטרם בוצעו. */
+async function findScheduledRefunds(req) {
+  const filter = {
+    "cancellation.refunds": { $elemMatch: { refunded: { $ne: true } } },
+  };
+  applySince(req, filter);
+  const rows = await Registration.find(filter)
+    .select("studentName cancellation")
+    .lean();
+  const out = [];
+  for (const r of rows) {
+    for (const x of r.cancellation?.refunds || []) {
+      if (x.refunded) continue;
+      const amount = Number(x.amount) || 0;
+      if (amount <= 0) continue;
+      out.push({
+        studentName: r.studentName,
+        amount,
+        dueDate: x.dueDate ? new Date(x.dueDate) : null,
+        note: x.note || "",
+      });
+    }
+  }
+  return out;
 }
 
 /** Strip VAT from an expense amount when requested and the amount includes it. */
@@ -312,16 +372,13 @@ export const forecast = asyncHandler(async (req, res) => {
   // סליקה לאשראי, מועד תשלום לשאר), כך שכל העמודות המתוארכות מוצגות ורק
   // אחריהן עמודת "תאריך לא ידוע".
   if (req.query.full === "1") {
-    const lastFilter = {
-      outstanding: { $gt: 0 },
-      recordType: { $in: ["registration", "collection_followup"] },
-    };
+    const lastFilter = { outstanding: { $gt: 0 }, ...receivableTypes() };
     applySince(req, lastFilter);
     const rows = await Registration.find(lastFilter).select("payments").lean();
     let last = null;
     for (const r of rows) {
       for (const p of r.payments || []) {
-        if (p.paid || !p.dueDate) continue;
+        if (p.paid || p.canceled || !p.dueDate) continue;
         const cash = cashDateOf(p);
         if (cash && (!last || cash > last)) last = cash;
       }
@@ -342,10 +399,7 @@ export const forecast = asyncHandler(async (req, res) => {
   // Receivables only: real registrations + ongoing collection follow-ups.
   // (refunds were zeroed at import; advertising / "other" are not income.)
   const unscheduled = { total: 0, byCategory: {} };
-  const debtorsFilter = {
-    outstanding: { $gt: 0 },
-    recordType: { $in: ["registration", "collection_followup"] },
-  };
+  const debtorsFilter = { outstanding: { $gt: 0 }, ...receivableTypes() };
   applySince(req, debtorsFilter); // מוד "מ-2026 בלבד"
   const debtors = await Registration.find(debtorsFilter)
     .select(
@@ -374,7 +428,7 @@ export const forecast = asyncHandler(async (req, res) => {
     const chargeFrom = addMonths(startOfMonth(firstMonthStart), -1);
     const clearingFilter = {
       schemaVersion: 2,
-      recordType: { $in: ["registration", "collection_followup"] },
+      ...receivableTypes(),
       payments: {
         $elemMatch: {
           paid: true,
@@ -424,6 +478,18 @@ export const forecast = asyncHandler(async (req, res) => {
     .select("amount vatIncluded recurrence dayOfMonth date startDate endDate")
     .lean();
   attributeExpenses(expenses, buckets, index, includeVat, keyOf);
+
+  // --- EXPENSE: החזרים ללקוחות מביטולי עסקה - כסף שיוצא בתאריך שנקבע להחזר ---
+  for (const r of await findScheduledRefunds(req)) {
+    let at = r.dueDate || firstMonthStart;
+    if (at < firstMonthStart) at = firstMonthStart; // מועד שעבר - ההחזר עדיין ייצא
+    const idx = index.get(keyOf(at));
+    if (idx !== undefined) {
+      buckets[idx].expectedExpense += includeVat
+        ? r.amount
+        : r.amount / VAT_DIVISOR;
+    }
+  }
 
   // --- finalize: round, compute net + running cumulative + totals ---
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -512,10 +578,7 @@ export const monthDetail = asyncHandler(async (req, res) => {
     windowFrom && windowFrom.getTime() === monthStart.getTime();
 
   const round2 = (n) => Math.round(n * 100) / 100;
-  const debtorsFilter = {
-    outstanding: { $gt: 0 },
-    recordType: { $in: ["registration", "collection_followup"] },
-  };
+  const debtorsFilter = { outstanding: { $gt: 0 }, ...receivableTypes() };
   applySince(req, debtorsFilter);
   const debtors = await Registration.find(debtorsFilter)
     .select(
@@ -527,7 +590,7 @@ export const monthDetail = asyncHandler(async (req, res) => {
   for (const reg of debtors) {
     if (reg.schemaVersion === 2) {
       for (const p of reg.payments || []) {
-        if (p.paid) continue;
+        if (p.paid || p.canceled) continue; // בוטל בביטול עסקה - לא ייגבה
         const amt = Number(p.amount) || 0;
         if (amt <= 0) continue;
         // השיבוץ לעמודה נעשה לפי מועד קבלת הכסף (אשראי → סליקה ב-7 לחודש העוקב)
@@ -586,7 +649,7 @@ export const monthDetail = asyncHandler(async (req, res) => {
     const chargeTo = startOfMonth(monthEnd);
     const clearingFilter = {
       schemaVersion: 2,
-      recordType: { $in: ["registration", "collection_followup"] },
+      ...receivableTypes(),
       payments: {
         $elemMatch: {
           paid: true,
@@ -665,6 +728,20 @@ export const monthDetail = asyncHandler(async (req, res) => {
       amount: round2(expenseAmount(exp, includeVat)),
     });
   }
+
+  // --- החזרים ללקוחות (ביטולי עסקה) שנקבעו לחודש הזה - כמו בתחזית ---
+  for (const r of await findScheduledRefunds(req)) {
+    const at = r.dueDate;
+    const inBucket = at && at >= monthStart && at < monthEnd;
+    const clampedHere = isFirstMonth && (!at || (windowFrom && at < windowFrom));
+    if (!inBucket && !clampedHere) continue;
+    expenseItems.push({
+      name: `החזר ללקוח - ${r.studentName}${r.note ? ` (${r.note})` : ""}`,
+      category: "החזר ביטול עסקה",
+      recurrence: "none",
+      amount: round2(includeVat ? r.amount : r.amount / VAT_DIVISOR),
+    });
+  }
   expenseItems.sort((a, b) => b.amount - a.amount);
 
   res.json({
@@ -692,10 +769,7 @@ export const unscheduledDetail = asyncHandler(async (req, res) => {
   const includeVat = req.query.vat !== "false";
   const round2 = (n) => Math.round(n * 100) / 100;
 
-  const debtorsFilter = {
-    outstanding: { $gt: 0 },
-    recordType: { $in: ["registration", "collection_followup"] },
-  };
+  const debtorsFilter = { outstanding: { $gt: 0 }, ...receivableTypes() };
   applySince(req, debtorsFilter);
   const debtors = await Registration.find(debtorsFilter)
     .select(
@@ -708,7 +782,7 @@ export const unscheduledDetail = asyncHandler(async (req, res) => {
     let remainder = 0;
     if (reg.schemaVersion === 2) {
       const scheduled = (reg.payments || [])
-        .filter((p) => !p.paid)
+        .filter((p) => !p.paid && !p.canceled)
         .reduce((a, p) => a + (p.amount || 0), 0);
       remainder = (Number(reg.outstanding) || 0) - scheduled;
     } else if (!SCHEDULED_CATEGORIES.has(reg.paymentCategory || "")) {

@@ -21,6 +21,8 @@ router.put("/:id", ctrl.update);
 
 // money + checklist sub-actions
 router.put("/:id/payment-plan", ctrl.updatePaymentPlan); // עריכת תוכנית תשלומים מלאה (v2, סכום מאוזן חובה)
+router.post("/:id/cancel", ctrl.cancelDeal); // ביטול עסקה / עדכון ביטול / שחזור
+
 router.post("/:id/payments", ctrl.addPayment);
 router.patch("/:id/checklist", ctrl.updateChecklist);
 

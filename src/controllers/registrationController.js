@@ -507,6 +507,11 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
       "עריכת תוכנית תשלומים זמינה לעסקאות מהפורמט החדש בלבד - עסקה ישנה משלימים קודם בעמוד עריכת הנתונים",
     );
   }
+  if (reg.cancellation?.canceledAt) {
+    throw ApiError.badRequest(
+      'העסקה מבוטלת - עריכת הגבייה וההחזרים נעשית דרך חלון "ביטול עסקה" בעמוד העסקאות',
+    );
+  }
 
   const METHODS = [
     "credit",
@@ -679,6 +684,159 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
 });
 
 /**
+ * POST /api/registrations/:id/cancel  -  ביטול עסקה / עדכון ביטול / שחזור.
+ * Body:
+ *   restore: true                     -> שחזור העסקה (מבטל את הביטול)
+ *   note: string (חובה)               -> הערת הביטול
+ *   keepPaymentIds: [paymentId]       -> תשלומים שטרם נגבו שימשיכו להיגבות (v2)
+ *   refunds: [{ _id?, amount, dueDate, note, refunded, sourcePaymentId }]
+ * חוקים: תשלום ששולם לעולם לא מסומן כמבוטל - כסף שנכנס חוזר רק דרך refunds;
+ * סך ההחזרים לא עולה על מה שנגבה; refunded חדש נחתם בשם המעדכן. שאר תשלומי
+ * העתיד מסומנים canceled ולא ייגבו (ידנית או אוטומטית) עד שחזור.
+ */
+export const cancelDeal = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אפשר לבטל רק עסקאות שלך");
+  }
+
+  const uid =
+    req.user?._id && req.user._id !== "admin-token" ? req.user._id : undefined;
+  const uname = req.user?.name || "";
+  reg.noteEntries = reg.noteEntries || [];
+  const fmt = (n) => `${Math.round(n).toLocaleString("he-IL")} ₪`;
+
+  // --- שחזור עסקה מבוטלת ---
+  if (req.body?.restore === true) {
+    if (!reg.cancellation?.canceledAt) {
+      throw ApiError.badRequest("העסקה אינה מבוטלת");
+    }
+    const refundedSum = (reg.cancellation.refunds || [])
+      .filter((r) => r.refunded)
+      .reduce((s, r) => s + (r.amount || 0), 0);
+    if (refundedSum > 0) {
+      throw ApiError.badRequest(
+        `בוצעו כבר החזרים בסך ${fmt(refundedSum)} - אי אפשר לשחזר אוטומטית. יש ליישר קודם את התשלומים ידנית`,
+      );
+    }
+    for (const p of reg.payments || []) p.canceled = undefined;
+    reg.cancellation = undefined;
+    reg.recordType = "registration";
+    reg.noteEntries.push({
+      text: "העסקה שוחזרה - הביטול בוטל וכל התשלומים חזרו לתוקף",
+      date: new Date(),
+      by: uid,
+      byName: uname,
+    });
+    reg.recompute();
+    await reg.save();
+    return res.json({ success: true, data: reg });
+  }
+
+  // --- ביטול / עדכון ביטול ---
+  const note = cleanStr(req.body?.note);
+  if (!note) {
+    throw ApiError.badRequest("נדרשת הערת ביטול - כמה מילים על סיבת הביטול");
+  }
+
+  const isV2 = reg.schemaVersion === 2;
+  const keep = new Set(
+    (Array.isArray(req.body?.keepPaymentIds) ? req.body.keepPaymentIds : [])
+      .filter(Boolean)
+      .map(String),
+  );
+  let keptFuture = 0;
+  let canceledSum = 0;
+  let paidSum = Number(reg.totalPaid) || 0;
+  if (isV2) {
+    paidSum = 0;
+    for (const p of reg.payments || []) {
+      if (p.paid) {
+        // כסף שנכנס לא "מתבטל" - החזרתו נרשמת כהחזר מפורש
+        p.canceled = undefined;
+        paidSum += p.amount || 0;
+      } else if (keep.has(String(p._id))) {
+        p.canceled = undefined;
+        keptFuture += p.amount || 0;
+      } else {
+        p.canceled = true;
+        canceledSum += p.amount || 0;
+      }
+    }
+  }
+
+  const prevRefunds = new Map(
+    (reg.cancellation?.refunds || []).map((r) => [String(r._id), r]),
+  );
+  const incoming = Array.isArray(req.body?.refunds) ? req.body.refunds : [];
+  const refunds = incoming.map((r, i) => {
+    const rowNo = i + 1;
+    const amount = parseNumber(r.amount);
+    if (!(amount > 0)) {
+      throw ApiError.badRequest(`החזר ${rowNo}: סכום ההחזר חייב להיות חיובי`);
+    }
+    const dueDate = r.dueDate ? new Date(r.dueDate) : null;
+    if (!dueDate || Number.isNaN(+dueDate)) {
+      throw ApiError.badRequest(`החזר ${rowNo}: יש לקבוע תאריך להחזר`);
+    }
+    const prev = r._id ? prevRefunds.get(String(r._id)) : null;
+    const refunded = Boolean(r.refunded);
+    return {
+      ...(prev ? { _id: prev._id } : {}),
+      amount,
+      dueDate,
+      note: cleanStr(r.note) || undefined,
+      sourcePaymentId: cleanStr(r.sourcePaymentId) || undefined,
+      refunded,
+      // חותמת ביצוע: נשמרת אם כבר היה מסומן; נחתמת עכשיו אם סומן בעדכון הזה
+      refundedAt: refunded
+        ? prev?.refunded
+          ? prev.refundedAt
+          : new Date()
+        : undefined,
+      refundedByName: refunded
+        ? prev?.refunded
+          ? prev.refundedByName
+          : uname
+        : undefined,
+    };
+  });
+  const refundSum = refunds.reduce((s, r) => s + r.amount, 0);
+  if (refundSum > paidSum + 0.5) {
+    throw ApiError.badRequest(
+      `סך ההחזרים (${fmt(refundSum)}) גבוה ממה שנגבה בפועל (${fmt(paidSum)})`,
+    );
+  }
+
+  const firstCancel = !reg.cancellation?.canceledAt;
+  reg.cancellation = {
+    canceledAt: reg.cancellation?.canceledAt || new Date(),
+    by: firstCancel ? uid : reg.cancellation?.by,
+    byName: firstCancel ? uname : reg.cancellation?.byName,
+    note,
+    refunds,
+  };
+  reg.recordType = "cancelled";
+
+  const parts = [];
+  if (isV2 && canceledSum > 0) parts.push(`בוטלה גבייה של ${fmt(canceledSum)}`);
+  if (!isV2) parts.push("היתרה לא תיגבה");
+  if (keptFuture > 0) parts.push(`ימשיכו להיגבות ${fmt(keptFuture)}`);
+  if (refundSum > 0) parts.push(`נקבעו החזרים ללקוח בסך ${fmt(refundSum)}`);
+  reg.noteEntries.push({
+    text: `${firstCancel ? "העסקה בוטלה" : "עדכון ביטול העסקה"}${parts.length ? ` - ${parts.join(" · ")}` : ""}. הערה: ${note}`,
+    date: new Date(),
+    by: uid,
+    byName: uname,
+  });
+
+  reg.recompute();
+  await reg.save();
+  res.json({ success: true, data: reg });
+});
+
+/**
  * POST /api/registrations/:id/payments
  * Body { amount, method, date, kind, note }. Push payment, recompute(), save.
  */
@@ -822,6 +980,11 @@ export const markPaymentPaid = asyncHandler(async (req, res) => {
   }
   const p = reg.payments.id(req.params.paymentId);
   if (!p) throw ApiError.notFound("התשלום לא נמצא");
+  if (p.canceled) {
+    throw ApiError.badRequest(
+      'התשלום בוטל במסגרת ביטול העסקה - כדי לגבות אותו יש להחזירו לתוקף בחלון "ביטול עסקה"',
+    );
+  }
   if (!p.paid) {
     p.paid = true;
     p.confirmedBy =

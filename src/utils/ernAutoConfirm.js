@@ -24,6 +24,7 @@ export async function autoConfirmDueErn(now = new Date()) {
     let changed = false;
     for (const p of reg.payments) {
       if (p.paid) continue;
+      if (p.canceled) continue; // בוטל בביטול עסקה - לא גובים
       if (!p.dueDate || new Date(p.dueDate) > now) continue;
       if (/הופסק/.test(p.note || "")) continue; // תוכנית שבוטלה - לא נכנס כסף
       p.paid = true;
