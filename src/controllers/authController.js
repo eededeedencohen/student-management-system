@@ -257,10 +257,10 @@ export const changePassword = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/auth/login-activity  (super-admin + localhost only)
+ * GET /api/auth/login-activity  (super-admin only, any environment)
  * מתי כל נציג/ה או מנהל (מלבד מנהל-העל עצמו) נכנס/ה למערכת: סיכום לכל משתמש
  * (כניסה אחרונה + מספר כניסות) + רשימת הכניסות האחרונות. הגישה מוגבלת ע"י
- * requireSuperAdminLocalhost בשכבת המסלול.
+ * requireSuperAdmin בשכבת המסלול.
  */
 export const loginActivity = asyncHandler(async (req, res) => {
   // מנהל-העל (עדן) לא מופיע ברשימה - היא מיועדת לראות אחרים.

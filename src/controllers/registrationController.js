@@ -720,11 +720,19 @@ export const cancelDeal = asyncHandler(async (req, res) => {
         `בוצעו כבר החזרים בסך ${fmt(refundedSum)} - אי אפשר לשחזר אוטומטית. יש ליישר קודם את התשלומים ידנית`,
       );
     }
-    for (const p of reg.payments || []) p.canceled = undefined;
+    // תשלום שנוצר בהסדר הביטול (דמי ביטול וכו') וטרם נגבה - מוסר עם הביטול;
+    // אם כבר נגבה הוא נשאר (כסף שנכנס לא נעלם).
+    const droppedFees = (reg.payments || [])
+      .filter((p) => p.addedOnCancel && !p.paid)
+      .reduce((s, p) => s + (p.amount || 0), 0);
+    reg.payments = (reg.payments || []).filter(
+      (p) => !(p.addedOnCancel && !p.paid),
+    );
+    for (const p of reg.payments) p.canceled = undefined;
     reg.cancellation = undefined;
     reg.recordType = "registration";
     reg.noteEntries.push({
-      text: "העסקה שוחזרה - הביטול בוטל וכל התשלומים חזרו לתוקף",
+      text: `העסקה שוחזרה - הביטול בוטל וכל התשלומים חזרו לתוקף${droppedFees > 0 ? ` (הוסרו תשלומי הסדר ביטול שטרם נגבו בסך ${fmt(droppedFees)})` : ""}`,
       date: new Date(),
       by: uid,
       byName: uname,
@@ -765,6 +773,43 @@ export const cancelDeal = asyncHandler(async (req, res) => {
       }
     }
   }
+
+  // --- תשלומים חדשים לגבייה שנוצרים בהסדר הביטול (למשל דמי ביטול) ---
+  const CANCEL_METHODS = ["credit", "ern", "cash", "transfer"];
+  const additions = Array.isArray(req.body?.addPayments)
+    ? req.body.addPayments
+    : [];
+  if (additions.length > 0 && !isV2) {
+    throw ApiError.badRequest(
+      "הוספת תשלומים בביטול זמינה לעסקאות מהפורמט החדש בלבד",
+    );
+  }
+  let addedSum = 0;
+  additions.forEach((a, i) => {
+    const rowNo = i + 1;
+    const amount = parseNumber(a.amount);
+    if (!(amount > 0)) {
+      throw ApiError.badRequest(`תשלום נוסף ${rowNo}: הסכום חייב להיות חיובי`);
+    }
+    const dueDate = a.dueDate ? new Date(a.dueDate) : null;
+    if (!dueDate || Number.isNaN(+dueDate)) {
+      throw ApiError.badRequest(`תשלום נוסף ${rowNo}: יש לקבוע תאריך גבייה`);
+    }
+    if (!CANCEL_METHODS.includes(a.method)) {
+      throw ApiError.badRequest(`תשלום נוסף ${rowNo}: יש לבחור אמצעי תשלום`);
+    }
+    reg.payments.push({
+      type: "one_time",
+      amount,
+      method: a.method,
+      methodCategory: a.method,
+      dueDate,
+      paid: false,
+      addedOnCancel: true,
+      note: cleanStr(a.note) || "נוסף בהסדר ביטול העסקה",
+    });
+    addedSum += amount;
+  });
 
   const prevRefunds = new Map(
     (reg.cancellation?.refunds || []).map((r) => [String(r._id), r]),
@@ -823,6 +868,7 @@ export const cancelDeal = asyncHandler(async (req, res) => {
   if (isV2 && canceledSum > 0) parts.push(`בוטלה גבייה של ${fmt(canceledSum)}`);
   if (!isV2) parts.push("היתרה לא תיגבה");
   if (keptFuture > 0) parts.push(`ימשיכו להיגבות ${fmt(keptFuture)}`);
+  if (addedSum > 0) parts.push(`נוספו לגבייה ${fmt(addedSum)}`);
   if (refundSum > 0) parts.push(`נקבעו החזרים ללקוח בסך ${fmt(refundSum)}`);
   reg.noteEntries.push({
     text: `${firstCancel ? "העסקה בוטלה" : "עדכון ביטול העסקה"}${parts.length ? ` - ${parts.join(" · ")}` : ""}. הערה: ${note}`,

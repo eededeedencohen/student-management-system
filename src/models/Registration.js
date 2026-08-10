@@ -20,6 +20,9 @@ const paymentSchema = new Schema(
     // בוטל במסגרת ביטול עסקה: לא ייגבה (ידנית או אוטומטית) ולא נספר ביתרה.
     // נשמר ברשומה (ולא נמחק) כדי שההיסטוריה והחוזה יישארו שלמים.
     canceled: { type: Boolean },
+    // נוצר בתוך חלון ביטול העסקה (למשל דמי ביטול) - בשחזור העסקה תשלום כזה
+    // שטרם נגבה מוסר, כי הוא היה חלק מהסדר הביטול בלבד.
+    addedOnCancel: { type: Boolean },
     confirmedBy: { type: Schema.Types.ObjectId, ref: "User" }, // who pressed "סמן כשולם"
     confirmedByName: { type: String },
     confirmedAt: { type: Date },

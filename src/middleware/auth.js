@@ -62,44 +62,14 @@ export const requireManager = (req, res, next) => {
 };
 
 /**
- * Restrict to the super-admin (עדן) only - no localhost requirement (unlike
- * requireSuperAdminLocalhost). Uses the REAL user so it still applies while
- * "viewing as" another user. Used by the emails feature.
+ * Restrict to the super-admin (עדן) only, in any environment. Uses the REAL
+ * user so it still applies while "viewing as" another user.
+ * Used by the emails feature and the login-activity page.
  */
 export const requireSuperAdmin = (req, res, next) => {
   const real = req.impersonator || req.user;
   if (real?.superAdmin !== true) {
     throw ApiError.forbidden("הפעולה מותרת למנהל-העל (עדן) בלבד");
-  }
-  next();
-};
-
-/** True when the request's DIRECT peer is the loopback interface (local machine). */
-const isLoopbackPeer = (req) => {
-  // בכוונה N OT משתמשים ב-x-forwarded-for (ניתן לזיוף): רק בכתובת ה-socket
-  // האמיתית. בדב מקומי = ::1/127.0.0.1; דרך פרוקסי Render = כתובת פנימית שאינה loopback.
-  const ip = String(
-    req.socket?.remoteAddress || req.connection?.remoteAddress || "",
-  );
-  return (
-    ip === "127.0.0.1" ||
-    ip === "::1" ||
-    ip === "::ffff:127.0.0.1" ||
-    ip.startsWith("127.")
-  );
-};
-
-/**
- * Restrict to the super-admin (עדן) AND to local execution (localhost) only.
- * שני התנאים נאכפים בשרת - גם אם מישהו יעקוף את ה-UI.
- */
-export const requireSuperAdminLocalhost = (req, res, next) => {
-  const real = req.impersonator || req.user; // המשתמש האמיתי, גם במצב "צפייה כ-"
-  if (real?.superAdmin !== true) {
-    throw ApiError.forbidden("הפעולה מותרת למנהל-העל בלבד");
-  }
-  if (!isLoopbackPeer(req)) {
-    throw ApiError.forbidden("הצפייה זמינה רק בהרצה מקומית (localhost)");
   }
   next();
 };

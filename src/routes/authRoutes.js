@@ -1,5 +1,5 @@
 import express from "express";
-import { protect, requireSuperAdminLocalhost } from "../middleware/auth.js";
+import { protect, requireSuperAdmin } from "../middleware/auth.js";
 import { rateLimit } from "../utils/rateLimit.js";
 import * as ctrl from "../controllers/authController.js";
 
@@ -20,12 +20,7 @@ router.post(
 // המסלולים הבאים דורשים אימות.
 router.get("/me", protect, ctrl.me);
 router.post("/change-password", protect, ctrl.changePassword);
-// פעילות התחברות - מנהל-העל (עדן) בלבד, ורק בהרצה מקומית (localhost).
-router.get(
-  "/login-activity",
-  protect,
-  requireSuperAdminLocalhost,
-  ctrl.loginActivity,
-);
+// פעילות התחברות - מנהל-העל (עדן) בלבד, בכל סביבה (גם בענן).
+router.get("/login-activity", protect, requireSuperAdmin, ctrl.loginActivity);
 
 export default router;
