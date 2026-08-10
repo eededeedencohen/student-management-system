@@ -217,10 +217,27 @@ export const get = asyncHandler(async (req, res) => {
       )
     : roster;
 
+  // לוח המפגשים האמיתי מגיע מהמחזור המקושר (כולל דילוגים על חגים) - רשומת
+  // ה-Course הישנה מחזיקה רק התחלה/סוף/כמות, וחישוב שבועי ממנה מציג תאריכים שגויים.
+  const cohort = await CourseCohort.findOne({ sourceCourse: course._id })
+    .select("sessions")
+    .lean();
+  const cohortSessions = (cohort?.sessions || [])
+    .slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map((s) => ({
+      date: s.date,
+      startTime: s.startTime || "",
+      endTime: s.endTime || "",
+      location: s.location || "",
+      note: s.note || "",
+    }));
+
   res.json({
     success: true,
     data: {
       course,
+      cohortSessions,
       roster: visibleRoster,
       money: courseMoney(repMoneyDeals(req, roster)),
       enrolledCount: roster.length,
