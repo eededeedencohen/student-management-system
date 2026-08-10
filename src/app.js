@@ -40,6 +40,7 @@ app.use((req, res, next) => {
     (req.method === 'POST' && /^\/api\/public\/contract\/[^/]+\/email$/.test(req.path)) ||
     (req.method === 'PUT' && /^\/api\/registrations\/[^/]+\/payments\/[^/]+\/receipt$/.test(req.path)) ||
     (req.method === 'POST' && /^\/api\/registrations\/[^/]+\/contract\/upload-signed$/.test(req.path)) ||
+    (req.method === 'POST' && /^\/api\/quotes\/[^/]+\/pdf$/.test(req.path)) ||
     (req.method === 'POST' && (req.path === '/api/public/deals' || req.path === '/api/registrations'));
   return (large ? jsonLarge : jsonSmall)(req, res, next);
 });

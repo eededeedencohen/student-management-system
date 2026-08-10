@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import Quote from "../models/Quote.js";
 import QuoteTemplate from "../models/QuoteTemplate.js";
+import QuotePdf from "../models/QuotePdf.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { parseNumber, cleanStr } from "../utils/normalize.js";
@@ -121,7 +123,57 @@ export const remove = asyncHandler(async (req, res) => {
   if (!doc) throw ApiError.notFound("ההצעה לא נמצאה");
   ensureOwn(req, doc);
   await doc.deleteOne();
+  await QuotePdf.deleteOne({ quote: doc._id }); // גם עותק ה-PDF ששויך לה
   res.json({ success: true, data: { id: req.params.id } });
+});
+
+/**
+ * POST /api/quotes/:id/pdf - שמירת עותק PDF של ההצעה לשליחה בוואטסאפ.
+ * Body { pdfBase64, fileName }. שליחה חוזרת מחליפה את הקובץ; הטוקן (והקישור)
+ * נשארים יציבים. מחזיר { token } - הקישור הציבורי: /api/public/quote-pdf/:token.
+ */
+export const uploadQuotePdf = asyncHandler(async (req, res) => {
+  const doc = await Quote.findById(req.params.id);
+  if (!doc) throw ApiError.notFound("ההצעה לא נמצאה");
+  ensureOwn(req, doc);
+  const pdfBase64 = String(req.body?.pdfBase64 || "");
+  // PDF בקידוד base64 מתחיל תמיד ב-JVBER ("%PDF")
+  if (!pdfBase64.startsWith("JVBER") || pdfBase64.length < 100) {
+    throw ApiError.badRequest("הקובץ אינו PDF תקין");
+  }
+  if (pdfBase64.length > 12 * 1024 * 1024) {
+    throw ApiError.badRequest("קובץ ההצעה גדול מדי");
+  }
+  const existing = await QuotePdf.findOne({ quote: doc._id }).select("token");
+  const token = existing?.token || crypto.randomBytes(24).toString("base64url");
+  await QuotePdf.findOneAndUpdate(
+    { quote: doc._id },
+    {
+      $set: {
+        token,
+        filename: cleanStr(req.body?.fileName) || "quote.pdf",
+        pdfBase64,
+        byteLength: pdfBase64.length,
+      },
+    },
+    { upsert: true },
+  );
+  res.json({ success: true, data: { token } });
+});
+
+/** GET /api/public/quote-pdf/:token - מגיש את קובץ ה-PDF עצמו (ללא התחברות). */
+export const publicQuotePdf = asyncHandler(async (req, res) => {
+  const row = await QuotePdf.findOne({ token: req.params.token }).lean();
+  if (!row?.pdfBase64) throw ApiError.notFound("הקובץ לא נמצא");
+  const name = row.filename || "quote.pdf";
+  res.setHeader("Content-Type", "application/pdf");
+  // שם קובץ עברי דרך filename* (RFC 5987); ה-ASCII fallback גנרי
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="quote.pdf"; filename*=UTF-8''${encodeURIComponent(name)}`,
+  );
+  res.setHeader("Cache-Control", "private, max-age=0");
+  res.send(Buffer.from(row.pdfBase64, "base64"));
 });
 
 // ============================= טמפלטים =============================

@@ -16,6 +16,7 @@ router.get("/", ctrl.list);
 router.post("/", ctrl.create);
 router.put("/:id", ctrl.update);
 router.patch("/:id/status", ctrl.setStatus);
+router.post("/:id/pdf", ctrl.uploadQuotePdf); // עותק PDF לשליחה בוואטסאפ
 router.delete("/:id", ctrl.remove);
 
 export default router;
