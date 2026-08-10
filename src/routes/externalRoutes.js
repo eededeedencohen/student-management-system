@@ -1,6 +1,9 @@
 import express from "express";
 import * as ctrl from "../controllers/externalController.js";
-import { publicQuotePdf } from "../controllers/quoteController.js";
+import {
+  publicQuotePdf,
+  publicQuoteView,
+} from "../controllers/quoteController.js";
 import { rateLimit } from "../utils/rateLimit.js";
 
 /**
@@ -21,6 +24,7 @@ router.post(
 );
 router.get("/contract/:token/status", ctrl.contractStatus);
 router.get("/contract/:token/pdf", ctrl.downloadSignedContractPdf); // הורדת העותק החתום ע"י החותם
-router.get("/quote-pdf/:token", publicQuotePdf); // הצעת מחיר כ-PDF (קישור מוואטסאפ)
+router.get("/quote-pdf/:token", publicQuotePdf); // קובץ ה-PDF של הצעת מחיר (תצוגה/הורדה)
+router.get("/quote/:token", publicQuoteView); // נתוני ההצעה לעמוד התצוגה הציבורי
 
 export default router;

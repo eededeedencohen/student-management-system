@@ -161,19 +161,56 @@ export const uploadQuotePdf = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { token } });
 });
 
-/** GET /api/public/quote-pdf/:token - מגיש את קובץ ה-PDF עצמו (ללא התחברות). */
+/** GET /api/public/quote-pdf/:token[?download=1] - מגיש את קובץ ה-PDF עצמו
+ *  (ללא התחברות). download=1 → הורדה כקובץ; אחרת תצוגה בדפדפן. */
 export const publicQuotePdf = asyncHandler(async (req, res) => {
   const row = await QuotePdf.findOne({ token: req.params.token }).lean();
   if (!row?.pdfBase64) throw ApiError.notFound("הקובץ לא נמצא");
   const name = row.filename || "quote.pdf";
+  const mode = req.query.download === "1" ? "attachment" : "inline";
   res.setHeader("Content-Type", "application/pdf");
   // שם קובץ עברי דרך filename* (RFC 5987); ה-ASCII fallback גנרי
   res.setHeader(
     "Content-Disposition",
-    `inline; filename="quote.pdf"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    `${mode}; filename="quote.pdf"; filename*=UTF-8''${encodeURIComponent(name)}`,
   );
   res.setHeader("Cache-Control", "private, max-age=0");
   res.send(Buffer.from(row.pdfBase64, "base64"));
+});
+
+/**
+ * GET /api/public/quote/:token - נתוני ההצעה לעמוד התצוגה הציבורי (/quote/:token),
+ * שמרנדר את המסמך כמו בחוזה ומציע כפתור הורדה ל-PDF. מוחזרים רק שדות המסמך -
+ * לא בעלות, סטטוס או שדות פנימיים.
+ */
+export const publicQuoteView = asyncHandler(async (req, res) => {
+  const row = await QuotePdf.findOne({ token: req.params.token })
+    .select("quote")
+    .lean();
+  if (!row) throw ApiError.notFound("ההצעה לא נמצאה");
+  const q = await Quote.findById(row.quote).lean();
+  if (!q) throw ApiError.notFound("ההצעה לא נמצאה");
+  res.json({
+    success: true,
+    data: {
+      quoteNo: q.quoteNo || "",
+      fullName: q.fullName || "",
+      idNumber: q.idNumber || "",
+      phone: q.phone || "",
+      courseName: q.courseName || "",
+      description: q.description || "",
+      price: q.price || 0,
+      sessions: q.sessions || null,
+      sessionLength: q.sessionLength || "",
+      schedule: q.schedule || "",
+      place: q.place || "",
+      method: q.method || "",
+      startDate: q.startDate || "",
+      endDate: q.endDate || "",
+      recordedLine: q.recordedLine || "",
+      notes: q.notes || "",
+    },
+  });
 });
 
 // ============================= טמפלטים =============================
