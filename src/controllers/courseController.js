@@ -71,10 +71,19 @@ const ROSTER_FIELDS =
 async function computeEnrollment(req) {
   const courses = await Course.find({}).lean();
   const index = buildCourseIndex(courses);
+  // שיוך מחזור מפורש (reg.cohort, נקבע בעריכת הנתונים) הוא ההצהרה הסמכותית -
+  // גובר על FK קורס ישן ועל ההתאמה לפי שם, אחרת עסקה ששויכה מחדש נשארת
+  // משובצת ברשומה הישנה.
+  const cohortLinks = await CourseCohort.find({ sourceCourse: { $ne: null } })
+    .select("sourceCourse")
+    .lean();
+  const sourceByCohort = new Map(
+    cohortLinks.map((c) => [String(c._id), String(c.sourceCourse)]),
+  );
   const dealsFilter = { recordType: "registration" };
   if (req) applySince(req, dealsFilter); // מוד "מ-2026 בלבד"
   const deals = await Registration.find(dealsFilter)
-    .select(ROSTER_FIELDS + " course coursesAll courseField cohortLabel")
+    .select(ROSTER_FIELDS + " course coursesAll courseField cohortLabel cohort")
     .lean();
 
   const byCourse = new Map();
@@ -90,6 +99,11 @@ async function computeEnrollment(req) {
       .filter((id) => index.byId.has(id));
     if (all.length) {
       for (const id of all) push(id, d, "fk-multi");
+      continue;
+    }
+    const viaCohort = d.cohort ? sourceByCohort.get(String(d.cohort)) : null;
+    if (viaCohort && index.byId.has(viaCohort)) {
+      push(viaCohort, d, "cohort-fk");
       continue;
     }
     const m = matchDealToCourse(d, index);
