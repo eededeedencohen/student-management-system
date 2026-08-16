@@ -240,9 +240,28 @@ export const listCohorts = asyncHandler(async (req, res) => {
     .populate("teacher", "fullName")
     .sort({ createdAt: -1 })
     .lean();
+  // עסקת חבילה נספרת בכל אחד מהמחזורים שלה (cohortsAll), לא רק בראשי
   const counts = await Registration.aggregate([
-    { $match: { recordType: "registration", cohort: { $ne: null } } },
-    { $group: { _id: "$cohort", n: { $sum: 1 } } },
+    {
+      $match: {
+        recordType: "registration",
+        $or: [{ cohort: { $ne: null } }, { "cohortsAll.0": { $exists: true } }],
+      },
+    },
+    {
+      $project: {
+        cohorts: {
+          $cond: [
+            { $gt: [{ $size: { $ifNull: ["$cohortsAll", []] } }, 0] },
+            "$cohortsAll",
+            ["$cohort"],
+          ],
+        },
+      },
+    },
+    { $unwind: "$cohorts" },
+    { $match: { cohorts: { $ne: null } } },
+    { $group: { _id: "$cohorts", n: { $sum: 1 } } },
   ]);
   const byCohort = new Map(counts.map((c) => [String(c._id), c.n]));
   res.json({
@@ -462,7 +481,9 @@ export const updateCohort = asyncHandler(async (req, res) => {
 });
 
 export const deleteCohort = asyncHandler(async (req, res) => {
-  const inUse = await Registration.exists({ cohort: req.params.id });
+  const inUse = await Registration.exists({
+    $or: [{ cohort: req.params.id }, { cohortsAll: req.params.id }],
+  });
   if (inUse)
     throw ApiError.badRequest("לא ניתן למחוק - יש עסקאות המשויכות למחזור");
   const c = await CourseCohort.findById(req.params.id).lean();
@@ -494,8 +515,16 @@ export const deleteCohort = asyncHandler(async (req, res) => {
  */
 const dealSourceIds = (d, index, sourceByCohort) => {
   const extras = (d.coursesAll || []).map(String);
-  const viaCohort = d.cohort ? sourceByCohort.get(String(d.cohort)) : null;
-  if (viaCohort) return [...new Set([viaCohort, ...extras])];
+  // עסקת חבילה: כל המחזורים (cohortsAll); אחרת המחזור היחיד (cohort)
+  const dealCohorts = d.cohortsAll?.length
+    ? d.cohortsAll
+    : d.cohort
+      ? [d.cohort]
+      : [];
+  const viaCohorts = dealCohorts
+    .map((c) => sourceByCohort.get(String(c)))
+    .filter(Boolean);
+  if (viaCohorts.length) return [...new Set([...viaCohorts, ...extras])];
   if (d.course) return [...new Set([String(d.course), ...extras])];
   const m = matchDealToCourse(d, index); // { courseId, how } | null
   return m?.courseId ? [String(m.courseId)] : [];
@@ -503,10 +532,14 @@ const dealSourceIds = (d, index, sourceByCohort) => {
 
 export const listSourceCourses = asyncHandler(async (req, res) => {
   const courses = await Course.find({}).sort({ startDate: -1, name: 1 }).lean();
-  const cohorts = await CourseCohort.find({ sourceCourse: { $ne: null } })
+  const allCohorts = await CourseCohort.find({})
     .select("sourceCourse catalogCourse label")
     .populate("catalogCourse", "name")
     .lean();
+  const cohorts = allCohorts.filter((c) => c.sourceCourse);
+  // "משויך" = reg.cohort מצביע על מחזור שקיים בקטלוג - אותה הגדרה בדיוק כמו
+  // הפילטר "שיוך מחזור" בעמוד עריכת הנתונים, כדי ששני העמודים יראו אותם מספרים.
+  const validCohortIds = new Set(allCohorts.map((c) => String(c._id)));
   const bySource = new Map(cohorts.map((c) => [String(c.sourceCourse), c]));
   const sourceByCohort = new Map(
     cohorts.map((c) => [String(c._id), String(c.sourceCourse)]),
@@ -514,15 +547,29 @@ export const listSourceCourses = asyncHandler(async (req, res) => {
   // ספירת העסקאות לפי אותה התאמה היוריסטית שכל האפליקציה משתמשת בה (לא רק לפי ה-FK),
   // אחרת רשומות עם עסקאות יוצגו כ-0.
   const deals = await Registration.find({ recordType: "registration" })
-    .select("course courseRaw courseField cohortLabel dealDate coursesAll cohort")
+    .select(
+      "course courseRaw courseField cohortLabel dealDate coursesAll cohort cohortsAll",
+    )
     .lean();
   const index = buildCourseIndex(courses);
   const dealsByCourse = new Map();
-  const bump = (id) =>
-    id &&
-    dealsByCourse.set(String(id), (dealsByCourse.get(String(id)) || 0) + 1);
+  const assignedByCourse = new Map();
+  const bump = (map, id) =>
+    id && map.set(String(id), (map.get(String(id)) || 0) + 1);
+  let totalAssigned = 0;
   for (const d of deals) {
-    for (const id of dealSourceIds(d, index, sourceByCohort)) bump(id);
+    // עסקת חבילה נחשבת "משויכת" אם אחד ממחזוריה קיים בקטלוג
+    const dealCohorts = d.cohortsAll?.length
+      ? d.cohortsAll
+      : d.cohort
+        ? [d.cohort]
+        : [];
+    const assigned = dealCohorts.some((c) => validCohortIds.has(String(c)));
+    if (assigned) totalAssigned += 1;
+    for (const id of dealSourceIds(d, index, sourceByCohort)) {
+      bump(dealsByCourse, id);
+      if (assigned) bump(assignedByCourse, id);
+    }
   }
 
   res.json({
@@ -544,6 +591,7 @@ export const listSourceCourses = asyncHandler(async (req, res) => {
         price: c.price ?? null,
         sourceFile: c.sourceFile || "",
         dealsCount: dealsByCourse.get(String(c._id)) || 0,
+        assignedCount: assignedByCourse.get(String(c._id)) || 0,
         mapped: Boolean(hit),
         mappedTo: hit
           ? {
@@ -554,6 +602,12 @@ export const listSourceCourses = asyncHandler(async (req, res) => {
           : null,
       };
     }),
+    // סיכום גלובלי - אותם מספרים כמו הפילטר "שיוך מחזור" בעמוד עריכת הנתונים
+    totals: {
+      deals: deals.length,
+      assigned: totalAssigned,
+      unassigned: deals.length - totalAssigned,
+    },
   });
 });
 
@@ -569,15 +623,25 @@ export const listSourceCourseDeals = asyncHandler(async (req, res) => {
   if (!exists) throw ApiError.notFound("רשומת הקורס לא נמצאה");
 
   const courses = await Course.find({}).lean();
-  const cohorts = await CourseCohort.find({ sourceCourse: { $ne: null } })
-    .select("sourceCourse")
+  const allCohorts = await CourseCohort.find({})
+    .select("sourceCourse catalogCourse label")
+    .populate("catalogCourse", "name")
     .lean();
   const sourceByCohort = new Map(
-    cohorts.map((c) => [String(c._id), String(c.sourceCourse)]),
+    allCohorts
+      .filter((c) => c.sourceCourse)
+      .map((c) => [String(c._id), String(c.sourceCourse)]),
+  );
+  // שם קריא למחזור המשויך - לצ'יפ "משויך" במודל העסקאות
+  const cohortNameById = new Map(
+    allCohorts.map((c) => [
+      String(c._id),
+      `${c.catalogCourse?.name || ""}${c.label ? ` ${c.label}` : ""}`.trim(),
+    ]),
   );
   const deals = await Registration.find({ recordType: "registration" })
     .select(
-      "course coursesAll courseRaw courseField cohortLabel dealDate studentName repName totalAmount review.status cohort",
+      "course coursesAll courseRaw courseField cohortLabel dealDate studentName repName totalAmount review.status cohort cohortsAll",
     )
     .lean();
   const index = buildCourseIndex(courses);
@@ -586,6 +650,12 @@ export const listSourceCourseDeals = asyncHandler(async (req, res) => {
   for (const d of deals) {
     const ids = dealSourceIds(d, index, sourceByCohort);
     if (!ids.includes(target)) continue;
+    // עסקת חבילה: מציגים את כל המחזורים המשויכים (מופרדים ב-+)
+    const dealCohorts = (
+      d.cohortsAll?.length ? d.cohortsAll : d.cohort ? [d.cohort] : []
+    )
+      .map(String)
+      .filter((c) => cohortNameById.has(c));
     out.push({
       id: String(d._id),
       studentName: d.studentName || "",
@@ -593,6 +663,8 @@ export const listSourceCourseDeals = asyncHandler(async (req, res) => {
       dealDate: d.dealDate || null,
       totalAmount: d.totalAmount || 0,
       reviewed: d.review?.status === "done",
+      cohortAssigned: dealCohorts.length > 0,
+      cohortName: dealCohorts.map((c) => cohortNameById.get(c)).join(" + "),
     });
   }
   out.sort((a, b) => new Date(b.dealDate || 0) - new Date(a.dealDate || 0));
@@ -627,7 +699,9 @@ export const assignAllSourceCourseDeals = asyncHandler(async (req, res) => {
   const deals = await Registration.find({
     recordType: { $in: ["registration", "cancelled", "collection_followup"] },
   })
-    .select("course coursesAll courseRaw courseField cohortLabel dealDate cohort")
+    .select(
+      "course coursesAll courseRaw courseField cohortLabel dealDate cohort cohortsAll",
+    )
     .lean();
   const toAssign = deals.filter(
     (d) =>
@@ -638,10 +712,22 @@ export const assignAllSourceCourseDeals = asyncHandler(async (req, res) => {
   const noteText =
     `שויך למחזור: ${cohort.catalogCourse?.name || ""} ${cohort.label || ""} (שיוך גורף מרשומת "${course.name}")`.trim();
   for (const d of toAssign) {
+    const set = { cohort: cohort._id };
+    // עסקת חבילה: המחזור הראשי הוחלף - מעדכנים גם את רשימת המחזורים
+    if (Array.isArray(d.cohortsAll) && d.cohortsAll.length) {
+      const prev = String(d.cohort || "");
+      set.cohortsAll = [
+        ...new Set(
+          d.cohortsAll
+            .map(String)
+            .map((c) => (c === prev ? String(cohort._id) : c)),
+        ),
+      ];
+    }
     await Registration.updateOne(
       { _id: d._id },
       {
-        $set: { cohort: cohort._id },
+        $set: set,
         $push: {
           noteEntries: {
             text: noteText,
@@ -699,7 +785,9 @@ export const mergeSourceCourses = asyncHandler(async (req, res) => {
   const deals = await Registration.find({
     recordType: { $in: ["registration", "cancelled", "collection_followup"] },
   })
-    .select("course coursesAll courseRaw courseField cohortLabel dealDate cohort")
+    .select(
+      "course coursesAll courseRaw courseField cohortLabel dealDate cohort cohortsAll",
+    )
     .lean();
   const fromKey = String(fromCourse._id);
   const intoKey = String(intoCourse._id);
@@ -722,6 +810,25 @@ export const mergeSourceCourses = asyncHandler(async (req, res) => {
     else if (fromCohort && String(d.cohort) === String(fromCohort._id)) {
       set.cohort = null; // המחזור של from נמחק - לא משאירים שיוך יתום
     }
+    // עסקת חבילה: מעדכנים גם את רשימת המחזורים - המחזור של from מוחלף
+    // ביעד (אם נבחר) או יוצא מהרשימה (המחזור נמחק יחד עם from)
+    if (
+      fromCohort &&
+      Array.isArray(d.cohortsAll) &&
+      d.cohortsAll.map(String).includes(String(fromCohort._id))
+    ) {
+      const replaced = d.cohortsAll
+        .map(String)
+        .map((c) =>
+          c === String(fromCohort._id)
+            ? targetCohort
+              ? String(targetCohort._id)
+              : null
+            : c,
+        )
+        .filter(Boolean);
+      set.cohortsAll = [...new Set(replaced)];
+    }
     await Registration.updateOne(
       { _id: d._id },
       {
@@ -738,7 +845,9 @@ export const mergeSourceCourses = asyncHandler(async (req, res) => {
   }
 
   if (fromCohort) {
-    const stillLinked = await Registration.exists({ cohort: fromCohort._id });
+    const stillLinked = await Registration.exists({
+      $or: [{ cohort: fromCohort._id }, { cohortsAll: fromCohort._id }],
+    });
     if (stillLinked) {
       throw ApiError.badRequest(
         "נשארו עסקאות משויכות למחזור של הרשומה שנמחקת - יש לשייך אותן קודם",

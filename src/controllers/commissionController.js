@@ -16,6 +16,7 @@ import {
   nowFromReq,
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
+import { excludeTestOnly } from "../utils/testOnlyScope.js";
 
 /**
  * commissionController - חישוב שכר ועמלות לכל נציג/ה.
@@ -221,8 +222,11 @@ export const list = asyncHandler(async (req, res) => {
   if (req.scopeRepId) repIdFilter = req.scopeRepId;
   else if (req.query.repId) repIdFilter = req.query.repId;
 
-  // שולפים את הנציגים הרלוונטיים (כולל מי שאין לו עסקאות בטווח -> שורה עם 0)
-  const userQuery = repIdFilter ? { _id: repIdFilter } : { role: "rep" };
+  // שולפים את הנציגים הרלוונטיים (כולל מי שאין לו עסקאות בטווח -> שורה עם 0).
+  // נציגת "פעיל לטסטים" מוסתרת מהרשימה הרחבה; בסקופ עצמי (repIdFilter) היא כן.
+  const userQuery = repIdFilter
+    ? { _id: repIdFilter }
+    : { role: "rep", ...excludeTestOnly(req) };
   const users = await User.find(userQuery);
 
   const byRep = await aggregateDeals(dateFilter, repIdFilter, req);
@@ -330,7 +334,9 @@ export const trend = asyncHandler(async (req, res) => {
   ]);
 
   // sidecar יציב (סדר הצטרפות = _id) לצבעים עקביים
-  const userQuery = repIdFilter ? { _id: repIdFilter } : { role: "rep" };
+  const userQuery = repIdFilter
+    ? { _id: repIdFilter }
+    : { role: "rep", ...excludeTestOnly(req) };
   const repUsers = await User.find(userQuery)
     .select("name")
     .sort({ _id: 1 })
@@ -401,7 +407,7 @@ export const breakdown = asyncHandler(async (req, res) => {
 
   const deals = await Registration.find(match)
     .select(
-      "externalId studentName student courseRaw courseField course dealDate totalAmount totalPaid outstanding paymentStatus",
+      "externalId studentName student courseRaw courseField course coursesInfo dealDate totalAmount totalPaid outstanding paymentStatus",
     )
     .populate("course", "name")
     .sort({ dealDate: -1 })
@@ -424,7 +430,11 @@ export const breakdown = asyncHandler(async (req, res) => {
       externalId: d.externalId,
       student: d.student,
       studentName: d.studentName,
-      course: d.course?.name || d.courseRaw || d.courseField || "",
+      // עסקת חבילה: כל שמות הקורסים; אחרת הקורס המקושר
+      course:
+        d.coursesInfo?.length > 1
+          ? d.coursesInfo.map((ci) => ci.name).join(" + ")
+          : d.course?.name || d.courseRaw || d.courseField || "",
       dealDate: d.dealDate,
       totalAmount: round2(d.totalAmount || 0),
       collected,

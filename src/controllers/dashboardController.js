@@ -11,6 +11,7 @@ import {
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
 import { cashDateOf } from "../utils/cashTiming.js";
+import { excludeTestOnly } from "../utils/testOnlyScope.js";
 
 /**
  * Dashboard controller - KPIs for the manager (וגם נציג בודד בסקופ).
@@ -246,6 +247,7 @@ export const upcomingDetail = asyncHandler(async (req, res) => {
         repName: 1,
         course: 1,
         courseRaw: 1,
+        coursesInfo: 1, // עסקת חבילה: שמות כל הקורסים
         amount: "$payments.amount",
         dueDate: "$payments.dueDate",
         method: "$payments.method",
@@ -273,7 +275,11 @@ export const upcomingDetail = asyncHandler(async (req, res) => {
       student: r.student,
       studentName: r.studentName,
       repName: r.repName,
-      courseName: r.courseDoc?.[0]?.name || r.courseRaw || null,
+      // עסקת חבילה: כל שמות הקורסים; אחרת הקורס המקושר (או המחרוזת הגולמית)
+      courseName:
+        r.coursesInfo?.length > 1
+          ? r.coursesInfo.map((ci) => ci.name).join(" + ")
+          : r.courseDoc?.[0]?.name || r.courseRaw || null,
       amount: round2(r.amount || 0),
       dueDate: r.dueDate,
       cashDate: r.cashDate,
@@ -448,7 +454,7 @@ export const timeseries = asyncHandler(async (req, res) => {
   }
 
   // sidecar יציב של כל הנציגות (כולל לא-פעילות, שעסקאות ישנות עדיין מפנות אליהן)
-  const repUsers = await User.find({ role: "rep" })
+  const repUsers = await User.find({ role: "rep", ...excludeTestOnly(req) })
     .select("name")
     .sort({ _id: 1 })
     .lean();
@@ -468,8 +474,11 @@ export const reps = asyncHandler(async (req, res) => {
   const repId = resolveRepId(req);
 
   // אילו נציגים להציג: נציג בסקופ -> רק הוא; מנהל -> כל הנציגים הפעילים (או repId נבחר)
-  const userFilter = { role: "rep", active: true };
-  if (repId) userFilter._id = repId;
+  const userFilter = { role: "rep", active: true, ...excludeTestOnly(req) };
+  if (repId) {
+    userFilter._id = repId;
+    delete userFilter.testOnly; // בחירה מפורשת/סקופ עצמי - נציגת טסטים רואה את עצמה
+  }
   const repUsers = await User.find(userFilter).select("name").lean();
 
   if (repUsers.length === 0) {
@@ -562,6 +571,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
         courseRaw: 1,
         courseField: 1,
         cohortLabel: 1,
+        coursesInfo: 1, // עסקת חבילה: מחזור לכל קורס
         repName: 1,
         amount: "$payments.amount",
         dueDate: "$payments.dueDate",
@@ -576,6 +586,12 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     { $sort: { dueDate: 1 } },
   ]);
 
+  // עסקת חבילה: כל תוויות המחזורים; אחרת התווית של המחזור היחיד
+  const cohortLabelOf = (r) =>
+    r.coursesInfo?.length > 1
+      ? r.coursesInfo.map((ci) => ci.cohortLabel).filter(Boolean).join(" + ")
+      : r.cohortLabel || "";
+
   // סימון אוטומטי מזוהה לפי החותם שנרשם ב-ernAutoConfirm
   const isAuto = (r) => /^אוטומטי/.test(r.confirmedByName || "");
   const base = (r) => ({
@@ -584,7 +600,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     student: r.student ? String(r.student) : null,
     studentName: r.studentName || "",
     courseName: r.courseRaw || r.courseField || "",
-    cohortLabel: r.cohortLabel || "",
+    cohortLabel: cohortLabelOf(r),
     repName: r.repName || "",
     amount: round2(r.amount || 0),
     dueDate: r.dueDate,
@@ -629,6 +645,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
         courseRaw: 1,
         courseField: 1,
         cohortLabel: 1,
+        coursesInfo: 1,
         repName: 1,
         index: "$installmentPlan.index",
         label: "$installmentPlan.label",
@@ -648,7 +665,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       student: r.student ? String(r.student) : null,
       studentName: r.studentName || "",
       courseName: r.courseRaw || r.courseField || "",
-      cohortLabel: r.cohortLabel || "",
+      cohortLabel: cohortLabelOf(r),
       amount: round2(r.amount || 0),
       dueDate: r.dueDate,
       method: r.method || "",
@@ -680,6 +697,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
         courseRaw: 1,
         courseField: 1,
         cohortLabel: 1,
+        coursesInfo: 1,
         repName: 1,
         amount: "$payments.amount",
         dueDate: "$payments.dueDate",

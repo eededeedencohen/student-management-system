@@ -2,6 +2,7 @@ import crypto from "crypto";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import User from "../models/User.js";
+import { excludeTestOnly } from "../utils/testOnlyScope.js";
 
 /** שם משתמש חוקי: אותיות אנגליות/ספרות/נקודה/מקף, 2-24 תווים. */
 const USERNAME_RX = /^[a-z0-9._-]{2,24}$/;
@@ -49,7 +50,8 @@ function buildCommission(raw = {}) {
  * תומך גם ב-?active=true/false ובחיפוש חופשי ?q (שם/אימייל).
  */
 export const list = asyncHandler(async (req, res) => {
-  const filter = {};
+  // משתמשי "פעיל לטסטים" גלויים רק למנהל-העל
+  const filter = { ...excludeTestOnly(req) };
 
   const role = req.query.role ?? "rep"; // ברירת מחדל: נציגות בלבד
   if (role && role !== "all") filter.role = role;
@@ -95,6 +97,12 @@ export const getOne = asyncHandler(async (req, res) => {
 export const create = asyncHandler(async (req, res) => {
   const { name, username, email, role, password, phone, commission, aliases } =
     req.body || {};
+  // "פעיל לטסטים" - רק מנהל-העל רשאי ליצור משתמש כזה (לפי המשתמש האמיתי)
+  const actorIsSuper = (req.impersonator || req.user)?.superAdmin === true;
+  const testOnly = req.body?.testOnly === true || req.body?.testOnly === "true";
+  if (testOnly && !actorIsSuper) {
+    throw ApiError.forbidden('רק מנהל-העל רשאי להגדיר משתמש "פעיל לטסטים"');
+  }
 
   if (!name || !String(name).trim())
     throw ApiError.badRequest("שם הוא שדה חובה");
@@ -115,6 +123,7 @@ export const create = asyncHandler(async (req, res) => {
     phone: phone ? String(phone).trim() : undefined,
     aliases: Array.isArray(aliases) ? aliases : undefined,
     commission: buildCommission(commission),
+    testOnly,
   });
   await user.setPassword(String(password));
   await user.save();
@@ -151,6 +160,15 @@ export const update = asyncHandler(async (req, res) => {
     if (!["manager", "rep"].includes(role))
       throw ApiError.badRequest("תפקיד לא תקין");
     user.role = role;
+  }
+  if (req.body?.testOnly !== undefined) {
+    // שינוי דגל הטסטים - רק מנהל-העל (לפי המשתמש האמיתי, גם ב"צפייה בתור")
+    const actorIsSuper = (req.impersonator || req.user)?.superAdmin === true;
+    if (!actorIsSuper) {
+      throw ApiError.forbidden('רק מנהל-העל רשאי לשנות "פעיל לטסטים"');
+    }
+    user.testOnly =
+      req.body.testOnly === true || req.body.testOnly === "true";
   }
 
   await user.save();
@@ -202,7 +220,8 @@ export const remove = asyncHandler(async (req, res) => {
 export const createPasswordResetLink = asyncHandler(async (req, res) => {
   const target = await User.findById(req.params.id).select("+passwordReset");
   if (!target) throw ApiError.notFound("המשתמש לא נמצא");
-  if (!target.active) throw ApiError.badRequest("לא ניתן להפיק קישור למשתמש לא פעיל");
+  // גם למשתמש לא-פעיל מותר להפיק קישור (הגדרת סיסמה לפני הפעלה) -
+  // ההתחברות עצמה נשארת חסומה כל עוד הוא לא פעיל.
 
   // ההרשאה נקבעת לפי המשתמש האמיתי (impersonator אם קיים), לא לפי "צפייה בתור"
   const actor = req.impersonator || req.user;

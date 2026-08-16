@@ -65,7 +65,13 @@ export const list = asyncHandler(async (req, res) => {
     if (repId) filter.rep = repId;
   }
 
-  if (req.query.course) filter.course = req.query.course;
+  // עסקת חבילה: סינון לפי קורס תופס גם עסקאות שהקורס אצלן ברשימה (coursesAll)
+  if (req.query.course) {
+    filter.$or = [
+      { course: req.query.course },
+      { coursesAll: req.query.course },
+    ];
+  }
   if (req.query.courseField) filter.courseField = req.query.courseField;
   if (req.query.paymentStatus) {
     filter.paymentStatus = req.query.paymentStatus;
@@ -937,6 +943,37 @@ export const updateChecklist = asyncHandler(async (req, res) => {
   const merged = { ...current };
   for (const key of allowed) {
     if (req.body?.[key] !== undefined) merged[key] = Boolean(req.body[key]);
+  }
+
+  // עסקת חבילה: "קבוצת קורס" נפרדת לכל קורס. body.courseGroups = {key: bool}.
+  // עסקאות חבילה ותיקות (נוצרו לפני התכונה) מאותחלות כאן מ-coursesInfo.
+  const isPackage = (reg.coursesInfo?.length || 0) > 1;
+  if (isPackage) {
+    let groups = Array.isArray(merged.courseGroups)
+      ? merged.courseGroups.map((g) => ({ ...g }))
+      : [];
+    if (groups.length !== reg.coursesInfo.length) {
+      groups = reg.coursesInfo.map((ci, i) => ({
+        key: String(i),
+        name: ci?.name || `קורס ${i + 1}`,
+        // הדגל הכללי הקיים נפרס על כולן (עסקה ותיקה שכבר סומנה - נשארת מסומנת)
+        added: Boolean(current.addedToCourseWhatsapp),
+      }));
+    }
+    if (req.body?.courseGroups && typeof req.body.courseGroups === "object") {
+      for (const g of groups) {
+        if (req.body.courseGroups[g.key] !== undefined) {
+          g.added = Boolean(req.body.courseGroups[g.key]);
+        }
+      }
+    }
+    // סימון הדגל הכללי במפורש = סימון/ניקוי כל הקבוצות יחד
+    if (req.body?.addedToCourseWhatsapp !== undefined) {
+      const v = Boolean(req.body.addedToCourseWhatsapp);
+      for (const g of groups) g.added = v;
+    }
+    merged.courseGroups = groups;
+    merged.addedToCourseWhatsapp = groups.every((g) => g.added);
   }
   reg.checklist = merged;
 

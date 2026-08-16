@@ -83,7 +83,9 @@ async function computeEnrollment(req) {
   const dealsFilter = { recordType: "registration" };
   if (req) applySince(req, dealsFilter); // מוד "מ-2026 בלבד"
   const deals = await Registration.find(dealsFilter)
-    .select(ROSTER_FIELDS + " course coursesAll courseField cohortLabel cohort")
+    .select(
+      ROSTER_FIELDS + " course coursesAll courseField cohortLabel cohort cohortsAll",
+    )
     .lean();
 
   const byCourse = new Map();
@@ -93,17 +95,23 @@ async function computeEnrollment(req) {
   };
   let unassigned = 0;
   for (const d of deals) {
-    // explicit multi-course link (combined deal) - enroll in each listed course
-    const all = (d.coursesAll || [])
-      .map(String)
-      .filter((id) => index.byId.has(id));
-    if (all.length) {
-      for (const id of all) push(id, d, "fk-multi");
-      continue;
+    // קישורים מפורשים = איחוד: כל מחזור משויך (cohortsAll/cohort → sourceCourse)
+    // וכל קורס ברשימת coursesAll (עסקה משולבת/חבילה) - העסקה נספרת בכולם.
+    const explicit = new Map(); // courseId -> how
+    const dealCohorts = d.cohortsAll?.length
+      ? d.cohortsAll
+      : d.cohort
+        ? [d.cohort]
+        : [];
+    for (const cid of dealCohorts) {
+      const src = sourceByCohort.get(String(cid));
+      if (src && index.byId.has(src)) explicit.set(src, "cohort-fk");
     }
-    const viaCohort = d.cohort ? sourceByCohort.get(String(d.cohort)) : null;
-    if (viaCohort && index.byId.has(viaCohort)) {
-      push(viaCohort, d, "cohort-fk");
+    for (const id of (d.coursesAll || []).map(String)) {
+      if (index.byId.has(id) && !explicit.has(id)) explicit.set(id, "fk-multi");
+    }
+    if (explicit.size) {
+      for (const [id, how] of explicit) push(id, d, how);
       continue;
     }
     const m = matchDealToCourse(d, index);
@@ -292,7 +300,9 @@ export const remove = asyncHandler(async (req, res) => {
     sourceCourse: req.params.id,
   }).lean();
   if (cohort) {
-    const inUse = await Registration.exists({ cohort: cohort._id });
+    const inUse = await Registration.exists({
+      $or: [{ cohort: cohort._id }, { cohortsAll: cohort._id }],
+    });
     if (inUse) {
       throw ApiError.badRequest(
         "לא ניתן למחוק - יש עסקאות המשויכות למחזור של הקורס",

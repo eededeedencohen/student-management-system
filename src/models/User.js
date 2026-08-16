@@ -45,6 +45,10 @@ const userSchema = new Schema(
     // super-admin may "view as" (impersonate) any user from within the app.
     superAdmin: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
+    // "פעיל לטסטים": משתמש שקיים רק לבדיקות - גלוי אך ורק למנהל-העל.
+    // מוסתר מכל רשימות המשתמשים/הנציגות (כולל טופס העסקה) לכל שאר המשתמשים,
+    // אבל התחברות ופעולות בשמו עובדות רגיל.
+    testOnly: { type: Boolean, default: false },
     phone: { type: String, trim: true },
     // כינויים/שמות חלופיים שמופיעים באקסלים (לזיהוי בעת ייבוא)
     aliases: [{ type: String, trim: true }],

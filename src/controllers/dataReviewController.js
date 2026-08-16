@@ -735,6 +735,16 @@ export const assignCohort = asyncHandler(async (req, res) => {
 
   // שומרים רק את השיוך עצמו. courseField/cohortLabel הם הערכים הקנוניים מהייבוא,
   // שעליהם מסתמכים סינונים, ייצוא והתאמת קורסים - לא דורסים אותם.
+  // עסקת חבילה: החלפת המחזור הראשי מעדכנת גם את רשימת המחזורים (cohortsAll)
+  if (reg.cohortsAll?.length) {
+    const prev = String(reg.cohort || "");
+    const next = reg.cohortsAll.map((c) =>
+      String(c) === prev ? cohort._id : c,
+    );
+    reg.cohortsAll = [
+      ...new Map(next.map((c) => [String(c), c])).values(),
+    ];
+  }
   reg.cohort = cohort._id;
   reg.noteEntries.push({
     text: `שויך למחזור: ${cohort.catalogCourse?.name || ""} ${cohort.label || ""}`.trim(),

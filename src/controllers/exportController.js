@@ -75,7 +75,14 @@ const buildRegFilter = (req, { onlyRegistrations = true } = {}) => {
   if (req.query.paymentStatus) filter.paymentStatus = req.query.paymentStatus;
   if (req.query.courseField) filter.courseField = req.query.courseField;
   if (req.query.cohortLabel) filter.cohortLabel = req.query.cohortLabel;
-  if (req.query.course) filter.course = req.query.course;
+  if (req.query.course) {
+    // עסקת חבילה: הסינון תופס גם עסקאות שהקורס אצלן ברשימה (coursesAll).
+    // נצבר ב-$and כדי לא להתנגש עם ה-$or של החיפוש החופשי.
+    filter.$and = [
+      ...(filter.$and || []),
+      { $or: [{ course: req.query.course }, { coursesAll: req.query.course }] },
+    ];
+  }
   if (req.query.needsReview === "true") filter.needsReview = true;
 
   // free-text search over name / id / course
@@ -86,7 +93,10 @@ const buildRegFilter = (req, { onlyRegistrations = true } = {}) => {
         .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
       "i",
     );
-    filter.$or = [{ studentName: rx }, { idNumber: rx }, { courseRaw: rx }];
+    filter.$and = [
+      ...(filter.$and || []),
+      { $or: [{ studentName: rx }, { idNumber: rx }, { courseRaw: rx }] },
+    ];
   }
 
   // date filter on dealDate
@@ -146,7 +156,11 @@ const regRow = (r) => ({
   name: r.studentName || "",
   idNumber: r.idNumber || "",
   course: r.courseRaw || r.courseField || "",
-  cohort: r.cohortLabel || "",
+  // עסקת חבילה: כל תוויות המחזורים; אחרת תווית המחזור היחיד
+  cohort:
+    r.coursesInfo?.length > 1
+      ? r.coursesInfo.map((ci) => ci.cohortLabel).filter(Boolean).join(" + ")
+      : r.cohortLabel || "",
   rep: r.repName || "",
   total: money(r.totalAmount),
   paid: money(r.totalPaid),
@@ -242,7 +256,8 @@ export const exportCourseRoster = asyncHandler(async (req, res) => {
   if (isObjectId) {
     course = await Course.findById(id).lean();
     if (!course) throw ApiError.notFound("הקורס לא נמצא");
-    filter.course = course._id;
+    // עסקת חבילה נכללת ברשימת המשתתפים של כל אחד מהקורסים שלה
+    filter.$or = [{ course: course._id }, { coursesAll: course._id }];
   } else {
     // fall back to courseField + cohortLabel matching
     const courseField = req.query.courseField || decodeURIComponent(id);

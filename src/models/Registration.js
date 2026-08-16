@@ -87,6 +87,22 @@ const checklistSchema = new Schema(
     addedToCourseWhatsapp: { type: Boolean, default: false }, // נכנס/ה לקבוצת הקורס
     addedToAlumniWhatsapp: { type: Boolean, default: false }, // נכנס/ה לקבוצת הבוגרים
     invoiceIssued: { type: Boolean, default: false }, // הוצאה חשבונית
+    // עסקת חבילה: מעקב "קבוצת קורס" נפרד לכל קורס. key = אינדקס הקורס
+    // ב-coursesInfo (הסדר קבוע מרגע היצירה). addedToCourseWhatsapp הכללי
+    // מסונכרן אוטומטית ב-recompute = כל הקבוצות סומנו.
+    courseGroups: {
+      type: [
+        new Schema(
+          {
+            key: { type: String },
+            name: { type: String },
+            added: { type: Boolean, default: false },
+          },
+          { _id: false },
+        ),
+      ],
+      default: undefined,
+    },
   },
   { _id: false },
 );
@@ -145,6 +161,25 @@ const registrationSchema = new Schema(
     cohortLabel: { type: String, trim: true }, // מחזור, למשל 9/25
     // שיוך רשמי למחזור קורס (CourseCohort) - נקבע בעמוד עריכת הנתונים ע"י הנציגה
     cohort: { type: Schema.Types.ObjectId, ref: "CourseCohort", index: true },
+    // עסקת חבילה מהטופס החיצוני: כל המחזורים שנבחרו; `cohort` נשאר הראשי.
+    cohortsAll: [{ type: Schema.Types.ObjectId, ref: "CourseCohort" }],
+    // סנאפשוט שמות הקורסים לחוזה (שם + מחזור לכל קורס בעסקה) - כך החוזה
+    // מציג את כל הקורסים גם אם רשומות הקטלוג ישתנו אחרי היצירה
+    coursesInfo: {
+      type: [
+        new Schema(
+          {
+            name: { type: String },
+            cohortLabel: { type: String },
+            // אופן ההשתתפות של הקורס הזה בעסקה (זום/פרונטלי) - בעסקת חבילה
+            // ייתכנו אופנים שונים בין הקורסים
+            deliveryMode: { type: String },
+          },
+          { _id: false },
+        ),
+      ],
+      default: undefined,
+    },
     // אופן ההשתתפות של הנרשם/ת: זום או פרונטלי. נקבע בטופס החיצוני - במחזור
     // "לפי בחירה" (hybrid) זו הבחירה של הנרשם/ת; במחזור קבוע זה האופן של המחזור.
     deliveryMode: { type: String, enum: ["zoom", "frontal"] },
@@ -243,6 +278,10 @@ const registrationSchema = new Schema(
 /** Recompute derived money + status fields. */
 registrationSchema.methods.recompute = function recompute() {
   const c0 = this.checklist || {};
+  // עסקת חבילה: הדגל הכללי "קבוצת קורס" = כל קבוצות הקורסים סומנו
+  if (c0.courseGroups?.length) {
+    c0.addedToCourseWhatsapp = c0.courseGroups.every((g) => g.added);
+  }
   const checklistComplete = Boolean(
     c0.signedTakanon && c0.addedToCourseWhatsapp && c0.addedToAlumniWhatsapp,
   );

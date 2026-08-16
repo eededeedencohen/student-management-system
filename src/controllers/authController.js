@@ -69,7 +69,8 @@ const publicUser = (user) => ({
  * Managers first, then reps by name. Internal tool - exposes only names/roles/emails.
  */
 export const loginOptions = asyncHandler(async (req, res) => {
-  const users = await User.find({ active: true })
+  // משתמשי "פעיל לטסטים" לא נחשפים ברשימה הציבורית - מתחברים אליהם בהקלדה ישירה
+  const users = await User.find({ active: true, testOnly: { $ne: true } })
     .select("name role email")
     .sort({ role: 1, name: 1 })
     .lean();
@@ -144,10 +145,11 @@ const hashToken = (t) => crypto.createHash("sha256").update(String(t)).digest("h
 async function findByResetToken(token) {
   const t = String(token || "").trim();
   if (t.length < 20) throw ApiError.notFound("הקישור אינו תקין או שפג תוקפו");
+  // גם משתמש לא-פעיל רשאי להגדיר סיסמה דרך קישור (למשל נציגת טסטים מושבתת) -
+  // ההתחברות עצמה עדיין חסומה כל עוד הוא לא פעיל.
   const user = await User.findOne({
     "passwordReset.tokenHash": hashToken(t),
     "passwordReset.expiresAt": { $gt: new Date() },
-    active: true,
   }).select("+passwordReset +passwordHash");
   if (!user) throw ApiError.notFound("הקישור אינו תקין או שפג תוקפו");
   return user;
