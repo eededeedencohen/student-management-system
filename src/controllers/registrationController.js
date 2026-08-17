@@ -2,6 +2,7 @@ import Registration from "../models/Registration.js";
 import Student from "../models/Student.js";
 import User from "../models/User.js";
 import Course from "../models/Course.js";
+import CourseCohort from "../models/CourseCohort.js";
 import Lead from "../models/Lead.js";
 import PaymentReceipt from "../models/PaymentReceipt.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -46,6 +47,38 @@ const buildSort = (query) => {
   if (!by) return { dealDate: -1, createdAt: -1 };
   if (by === "sourceRow") return { sourceRow: dir, sourceFile: dir, _id: 1 };
   return { [by]: dir, _id: 1 };
+};
+
+/**
+ * מוסיף לכל שורת עסקה את המחזורים המשויכים לה בפועל -
+ * assignedCohorts: [{ _id, courseName, label }]. "משויך" = reg.cohort (או cohortsAll
+ * בעסקת חבילה) שמצביע על מחזור שקיים בקטלוג - אותה הגדרה כמו הפילטר "שיוך מחזור"
+ * בעריכת הנתונים ובקטלוג. עמוד העסקאות מציג אותם בעמודת הקורס במקום השם החופשי.
+ */
+const attachAssignedCohorts = async (docs) => {
+  const cohortIdsOf = (r) =>
+    r.cohortsAll?.length ? r.cohortsAll : r.cohort ? [r.cohort] : [];
+  const ids = new Set();
+  for (const r of docs) for (const c of cohortIdsOf(r)) ids.add(String(c));
+  const cohorts = ids.size
+    ? await CourseCohort.find({ _id: { $in: [...ids] } })
+        .select("label catalogCourse")
+        .populate("catalogCourse", "name")
+        .lean()
+    : [];
+  const byId = new Map(cohorts.map((c) => [String(c._id), c]));
+  return docs.map((doc) => {
+    const obj = doc.toObject();
+    obj.assignedCohorts = cohortIdsOf(doc)
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean)
+      .map((c) => ({
+        _id: String(c._id),
+        courseName: c.catalogCourse?.name || "(קורס נמחק)",
+        label: c.label || "",
+      }));
+    return obj;
+  });
 };
 
 /**
@@ -97,7 +130,7 @@ export const list = asyncHandler(async (req, res) => {
 
   const { page, limit, skip } = paging(req.query);
 
-  const [data, total] = await Promise.all([
+  const [docs, total] = await Promise.all([
     Registration.find(filter)
       .sort(buildSort(req.query)) // default newest first; ?sortBy=sourceRow&order=asc
       .skip(skip)
@@ -106,6 +139,7 @@ export const list = asyncHandler(async (req, res) => {
       .populate("course", "name field"),
     Registration.countDocuments(filter),
   ]);
+  const data = await attachAssignedCohorts(docs);
 
   res.json({
     success: true,

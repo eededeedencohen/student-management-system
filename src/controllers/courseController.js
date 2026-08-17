@@ -180,7 +180,16 @@ export const list = asyncHandler(async (req, res) => {
  * מחזיר קורסים בפורמט מתאים לגאנט, כולל ספירת נרשמים לכל קורס.
  */
 export const gantt = asyncHandler(async (req, res) => {
-  const enrollment = await computeEnrollment(req);
+  const [enrollment, cohortLinks] = await Promise.all([
+    computeEnrollment(req),
+    // הקליינט מציג בגאנט רק קורסים שהוגדר להם מחזור - cohortId מסמן אותם
+    CourseCohort.find({ sourceCourse: { $ne: null } })
+      .select("sourceCourse")
+      .lean(),
+  ]);
+  const cohortBySource = new Map(
+    cohortLinks.map((c) => [String(c.sourceCourse), String(c._id)]),
+  );
   const courses = [...enrollment.courses].sort(
     (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0),
   );
@@ -190,6 +199,7 @@ export const gantt = asyncHandler(async (req, res) => {
       const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
       return {
         _id: c._id,
+        cohortId: cohortBySource.get(String(c._id)) || null,
         name: c.name,
         field: c.field,
         cohortLabel: c.cohortLabel,
