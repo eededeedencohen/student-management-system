@@ -36,7 +36,7 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
  * מחייבת שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs). הזיהוי לפי שם הקורס,
  * עמיד לכתיב מלא/חסר (פרקטישינר/פרקטישינייר) ולשם באנגלית.
  */
-const requiresEnglishDetails = (courseName = "") =>
+export const requiresEnglishDetails = (courseName = "") =>
   String(courseName).replace(/י/g, "").includes("פרקטשנר") ||
   /practitioner/i.test(String(courseName));
 

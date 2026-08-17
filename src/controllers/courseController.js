@@ -4,7 +4,7 @@ import Course from "../models/Course.js";
 import Registration from "../models/Registration.js";
 import CourseCohort from "../models/CourseCohort.js";
 import { buildCourseIndex, matchDealToCourse } from "../utils/courseMatch.js";
-import { applySince, sinceOf } from "../utils/dataScope.js";
+import { sinceOf } from "../utils/dataScope.js";
 
 /**
  * בקר קורסים - ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.
@@ -80,9 +80,13 @@ async function computeEnrollment(req) {
   const sourceByCohort = new Map(
     cohortLinks.map((c) => [String(c._id), String(c.sourceCourse)]),
   );
-  const dealsFilter = { recordType: "registration" };
-  if (req) applySince(req, dealsFilter); // מוד "מ-2026 בלבד"
-  const deals = await Registration.find(dealsFilter)
+  // רשומות קורס שמקושרות למחזור: הספירה שלהן חייבת להיות זהה אחד-לאחד לעמודת
+  // המחזורים בקטלוג, ולכן נספרים בהן קישורים מפורשים בלבד - בלי התאמה
+  // היוריסטית לפי שם, שהייתה מייצרת מספר שונה בין שני העמודים.
+  const linkedSources = new Set(sourceByCohort.values());
+  // ההרשמה עצמה אינה תלוית-תאריך: מי שסגר עסקה ב-2025 על מחזור של 2026 הוא
+  // נרשם לכל דבר. מוד "מ-2026 בלבד" ממשיך לחול על הכסף בלבד (moneyScoped).
+  const deals = await Registration.find({ recordType: "registration" })
     .select(
       ROSTER_FIELDS + " course coursesAll courseField cohortLabel cohort cohortsAll",
     )
@@ -115,7 +119,8 @@ async function computeEnrollment(req) {
       continue;
     }
     const m = matchDealToCourse(d, index);
-    if (!m) {
+    if (!m || linkedSources.has(String(m.courseId))) {
+      // אין התאמה, או שההתאמה היא לקורס-מחזור - שם רק שיוך מפורש נספר
       unassigned += 1;
       continue;
     }
@@ -123,6 +128,51 @@ async function computeEnrollment(req) {
   }
   return { courses, index, byCourse, unassigned };
 }
+
+/**
+ * מוד "מ-2026 בלבד" חל על הכסף בלבד: סכומי המכירות/גבייה מחושבים רק מעסקאות
+ * שמתאריך הגבול והלאה, אבל ספירת הנרשמים והרשימה עצמה נשארות מלאות - נרשם
+ * הוא נרשם גם אם סגר את העסקה לפני 2026.
+ */
+const moneyScoped = (req, deals) => {
+  const since = sinceOf(req);
+  if (!since) return deals;
+  return deals.filter((d) => d.dealDate && new Date(d.dealDate) >= since);
+};
+
+/**
+ * שמות קנוניים לרשומות קורס המקושרות למחזור: שם הקורס בדיוק כפי שהוגדר
+ * בקטלוג (טאב "קורסים") + תווית המחזור - לא האיות החופשי מהאקסל של יקיר
+ * ("נל"פ פרקטישינר" וכו'). רשומת האקסל עצמה לא משתנה במסד - רק התצוגה
+ * בעמודי הקורסים/גאנט; הטאב "מהאקסל שלי" בקטלוג ממשיך להציג את המקור.
+ */
+const canonicalBySource = async () => {
+  const links = await CourseCohort.find({ sourceCourse: { $ne: null } })
+    .select("sourceCourse label catalogCourse")
+    .populate("catalogCourse", "name")
+    .lean();
+  return new Map(
+    links.map((c) => [
+      String(c.sourceCourse),
+      {
+        cohortId: String(c._id),
+        catalogName: c.catalogCourse?.name || "",
+        label: c.label || "",
+      },
+    ]),
+  );
+};
+
+/** דורס שם/תחום/מחזור באובייקט תגובה לפי הקישור הקנוני (אם קיים). */
+const applyCanonicalNaming = (obj, link) => {
+  if (!link || !link.catalogName) return obj;
+  obj.name = link.label
+    ? `${link.catalogName} ${link.label}`
+    : link.catalogName;
+  obj.field = link.catalogName;
+  obj.cohortLabel = link.label;
+  return obj;
+};
 
 /**
  * GET /api/courses
@@ -145,28 +195,32 @@ export const list = asyncHandler(async (req, res) => {
   if (status) filter.status = status;
   if (weekday) filter.weekday = weekday;
 
-  const [data, enrollment, cohortLinks] = await Promise.all([
+  const [data, enrollment, canonical] = await Promise.all([
     Course.find(filter).sort({ startDate: 1 }).lean(),
     computeEnrollment(req),
-    // אילו רשומות מקושרות למחזור (החדש) - עריכה שלהן נפתחת בטופס המחזור
-    CourseCohort.find({ sourceCourse: { $ne: null } })
-      .select("sourceCourse")
-      .lean(),
+    // קישור למחזור: מזהה (עריכה בטופס המחזור) + השם הקנוני מהקטלוג לתצוגה
+    canonicalBySource(),
   ]);
-  const cohortBySource = new Map(
-    cohortLinks.map((c) => [String(c.sourceCourse), String(c._id)]),
-  );
   const withCounts = data
     .map((c) => {
+      const link = canonical.get(String(c._id));
       const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
-      return {
-        ...c,
-        cohortId: cohortBySource.get(String(c._id)) || null,
-        enrolledCount: dealsOfCourse.length,
-        ...courseMoney(repMoneyDeals(req, dealsOfCourse)),
-      };
+      return applyCanonicalNaming(
+        {
+          ...c,
+          cohortId: link ? link.cohortId : null,
+          // הספירה מלאה (כל תאריכי העסקאות) - זהה לעמודת המחזורים בקטלוג
+          enrolledCount: dealsOfCourse.length,
+          // הכסף כן מכבד את מוד "מ-2026 בלבד"
+          ...courseMoney(moneyScoped(req, repMoneyDeals(req, dealsOfCourse))),
+          // נראות במוד 2026 נקבעת לפי נרשמי 2026 - קורס ישן שנגמר נשאר מוסתר
+          _sinceCount: moneyScoped(req, dealsOfCourse).length,
+        },
+        link,
+      );
     })
-    .filter((c) => courseVisibleSince(req, c, c.enrolledCount));
+    .filter((c) => courseVisibleSince(req, c, c._sinceCount))
+    .map(({ _sinceCount, ...c }) => c);
   res.json({
     success: true,
     data: withCounts,
@@ -180,41 +234,44 @@ export const list = asyncHandler(async (req, res) => {
  * מחזיר קורסים בפורמט מתאים לגאנט, כולל ספירת נרשמים לכל קורס.
  */
 export const gantt = asyncHandler(async (req, res) => {
-  const [enrollment, cohortLinks] = await Promise.all([
+  const [enrollment, canonical] = await Promise.all([
     computeEnrollment(req),
-    // הקליינט מציג בגאנט רק קורסים שהוגדר להם מחזור - cohortId מסמן אותם
-    CourseCohort.find({ sourceCourse: { $ne: null } })
-      .select("sourceCourse")
-      .lean(),
+    // הקליינט מציג בגאנט רק קורסים שהוגדר להם מחזור - cohortId מסמן אותם,
+    // והשם/תחום נדרסים לשם הקנוני מהקטלוג (איחוד איותים לצבעים ולפילטרים)
+    canonicalBySource(),
   ]);
-  const cohortBySource = new Map(
-    cohortLinks.map((c) => [String(c.sourceCourse), String(c._id)]),
-  );
   const courses = [...enrollment.courses].sort(
     (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0),
   );
 
   const data = courses
     .map((c) => {
+      const link = canonical.get(String(c._id));
       const dealsOfCourse = enrollment.byCourse.get(String(c._id)) || [];
-      return {
-        _id: c._id,
-        cohortId: cohortBySource.get(String(c._id)) || null,
-        name: c.name,
-        field: c.field,
-        cohortLabel: c.cohortLabel,
-        startDate: c.startDate,
-        endDate: c.endDate,
-        sessionsCount: c.sessionsCount,
-        location: c.location,
-        lecturer: c.lecturer,
-        weekday: c.weekday,
-        status: c.status,
-        registrationsCount: dealsOfCourse.length,
-        ...courseMoney(repMoneyDeals(req, dealsOfCourse)),
-      };
+      return applyCanonicalNaming(
+        {
+          _id: c._id,
+          cohortId: link ? link.cohortId : null,
+          name: c.name,
+          field: c.field,
+          cohortLabel: c.cohortLabel,
+          startDate: c.startDate,
+          endDate: c.endDate,
+          sessionsCount: c.sessionsCount,
+          location: c.location,
+          lecturer: c.lecturer,
+          weekday: c.weekday,
+          status: c.status,
+          // ספירה מלאה (כל התאריכים) - זהה לקטלוג; הכסף מכבד את מוד "מ-2026"
+          registrationsCount: dealsOfCourse.length,
+          ...courseMoney(moneyScoped(req, repMoneyDeals(req, dealsOfCourse))),
+          _sinceCount: moneyScoped(req, dealsOfCourse).length,
+        },
+        link,
+      );
     })
-    .filter((c) => courseVisibleSince(req, c, c.registrationsCount));
+    .filter((c) => courseVisibleSince(req, c, c._sinceCount))
+    .map(({ _sinceCount, ...c }) => c);
 
   res.json({ success: true, data, total: data.length });
 });
@@ -252,8 +309,16 @@ export const get = asyncHandler(async (req, res) => {
   // לוח המפגשים האמיתי מגיע מהמחזור המקושר (כולל דילוגים על חגים) - רשומת
   // ה-Course הישנה מחזיקה רק התחלה/סוף/כמות, וחישוב שבועי ממנה מציג תאריכים שגויים.
   const cohort = await CourseCohort.findOne({ sourceCourse: course._id })
-    .select("sessions")
+    .select("sessions label catalogCourse")
+    .populate("catalogCourse", "name")
     .lean();
+  // גם כאן השם הקנוני מהקטלוג - שעמוד הקורס יתאים לרשימה
+  if (cohort) {
+    applyCanonicalNaming(course, {
+      catalogName: cohort.catalogCourse?.name || "",
+      label: cohort.label || "",
+    });
+  }
   const cohortSessions = (cohort?.sessions || [])
     .slice()
     .sort((a, b) => new Date(a.date) - new Date(b.date))
@@ -271,7 +336,8 @@ export const get = asyncHandler(async (req, res) => {
       course,
       cohortSessions,
       roster: visibleRoster,
-      money: courseMoney(repMoneyDeals(req, roster)),
+      // הכסף מכבד את מוד "מ-2026"; רשימת הנרשמים והספירה מלאות
+      money: courseMoney(moneyScoped(req, repMoneyDeals(req, roster))),
       enrolledCount: roster.length,
     },
   });

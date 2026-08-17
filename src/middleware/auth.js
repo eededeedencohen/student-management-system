@@ -62,6 +62,16 @@ export const requireManager = (req, res, next) => {
 };
 
 /**
+ * ניהול טפסי השלמת פרטים: מנהלים + מי שהודלק לה formsAccess (מיכל).
+ * ההרשאה נבדקת על המשתמש האפקטיבי - כולל בזמן "צפייה כ-".
+ */
+export const requireFormsAccess = (req, res, next) => {
+  if (req.user?.role !== "manager" && req.user?.formsAccess !== true)
+    throw ApiError.forbidden("אין הרשאה לניהול טפסים");
+  next();
+};
+
+/**
  * Restrict to the super-admin (עדן) only, in any environment. Uses the REAL
  * user so it still applies while "viewing as" another user.
  * Used by the emails feature and the login-activity page.

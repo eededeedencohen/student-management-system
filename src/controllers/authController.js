@@ -60,6 +60,8 @@ const publicUser = (user) => ({
   email: user.email,
   role: user.role,
   superAdmin: user.superAdmin === true,
+  // גישה לעמוד "ניהול טפסים" למי שאינה מנהלת (מיכל)
+  formsAccess: user.formsAccess === true,
   commission: user.commission,
 });
 

@@ -44,6 +44,8 @@ const userSchema = new Schema(
     role: { type: String, enum: ['manager', 'rep'], default: 'rep', index: true },
     // super-admin may "view as" (impersonate) any user from within the app.
     superAdmin: { type: Boolean, default: false },
+    // גישה לעמוד "ניהול טפסים" גם למי שאינה מנהלת (הודלק למיכל, 2026-08-17).
+    formsAccess: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     // "פעיל לטסטים": משתמש שקיים רק לבדיקות - גלוי אך ורק למנהל-העל.
     // מוסתר מכל רשימות המשתמשים/הנציגות (כולל טופס העסקה) לכל שאר המשתמשים,

@@ -114,6 +114,79 @@ export const deleteTeacher = asyncHandler(async (req, res) => {
 /* קורסים קטלוגיים                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * ספירת נרשמים + כסף שנכנס, לפי ההגדרה המאוחדת של שיוך (זהה לעמוד הקורסים):
+ * עסקה שייכת למחזור אם הוא ב-cohort/cohortsAll או שקורס המקור שלו ב-coursesAll.
+ * בלי תלות בתאריך העסקה. הכסף = totalPaid של עסקאות הרישום המשויכות; עסקת
+ * חבילה נספרת (גם כספית) בכל אחד מהמחזורים שלה, וברמת הקורס הקטלוגי כל עסקה
+ * נספרת פעם אחת לקורס. repId (נציגה) מגביל את הכסף לעסקאות שלה בלבד -
+ * הספירות נשארות מלאות, כמו המדיניות בעמוד הקורסים.
+ */
+const enrollmentStats = async ({ repId = null } = {}) => {
+  const cohortDocs = await CourseCohort.find({})
+    .select("sourceCourse catalogCourse")
+    .lean();
+  const cohortOfSource = new Map(
+    cohortDocs
+      .filter((c) => c.sourceCourse)
+      .map((c) => [String(c.sourceCourse), String(c._id)]),
+  );
+  const courseOfCohort = new Map(
+    cohortDocs.map((c) => [
+      String(c._id),
+      c.catalogCourse ? String(c.catalogCourse) : null,
+    ]),
+  );
+  const deals = await Registration.find({ recordType: "registration" })
+    .select("cohort cohortsAll coursesAll totalPaid rep")
+    .lean();
+  const byCohort = new Map(); // cohortId -> { count, collected }
+  const byCourse = new Map(); // catalogCourseId -> { count, collected }
+  const bump = (map, key, paid) => {
+    const cur = map.get(key) || { count: 0, collected: 0 };
+    cur.count += 1;
+    cur.collected += paid;
+    map.set(key, cur);
+  };
+  for (const d of deals) {
+    const set = new Set();
+    const dealCohorts = d.cohortsAll?.length
+      ? d.cohortsAll
+      : d.cohort
+        ? [d.cohort]
+        : [];
+    for (const c of dealCohorts) set.add(String(c));
+    for (const courseId of d.coursesAll || []) {
+      const via = cohortOfSource.get(String(courseId));
+      if (via) set.add(via);
+    }
+    const paid = repId && String(d.rep) !== repId ? 0 : d.totalPaid || 0;
+    for (const k of set) bump(byCohort, k, paid);
+    const courseSet = new Set(
+      [...set].map((k) => courseOfCohort.get(k)).filter(Boolean),
+    );
+    for (const k of courseSet) bump(byCourse, k, paid);
+  }
+  const round = (map) => {
+    for (const v of map.values()) v.collected = Math.round(v.collected * 100) / 100;
+  };
+  round(byCohort);
+  round(byCourse);
+  return { byCohort, byCourse };
+};
+
+const catalogCourseJson = (c, cohortsCount, stats) => ({
+  id: String(c._id),
+  name: c.name,
+  price: c.price || 0,
+  defaultSessionCount: c.defaultSessionCount || 0,
+  notes: c.notes || "",
+  active: c.active !== false,
+  cohortsCount,
+  enrolledCount: stats?.count || 0,
+  moneyCollected: stats?.collected || 0,
+});
+
 export const listCatalogCourses = asyncHandler(async (req, res) => {
   const courses = await CatalogCourse.find({})
     .sort({ name: 1 })
@@ -123,17 +196,16 @@ export const listCatalogCourses = asyncHandler(async (req, res) => {
     { $group: { _id: "$catalogCourse", n: { $sum: 1 } } },
   ]);
   const byCourse = new Map(counts.map((c) => [String(c._id), c.n]));
+  const stats = await enrollmentStats();
   res.json({
     success: true,
-    data: courses.map((c) => ({
-      id: String(c._id),
-      name: c.name,
-      price: c.price || 0,
-      defaultSessionCount: c.defaultSessionCount || 0,
-      notes: c.notes || "",
-      active: c.active !== false,
-      cohortsCount: byCourse.get(String(c._id)) || 0,
-    })),
+    data: courses.map((c) =>
+      catalogCourseJson(
+        c,
+        byCourse.get(String(c._id)) || 0,
+        stats.byCourse.get(String(c._id)),
+      ),
+    ),
   });
 });
 
@@ -194,7 +266,7 @@ export const deleteCatalogCourse = asyncHandler(async (req, res) => {
 /* מחזורי קורס                                                         */
 /* ------------------------------------------------------------------ */
 
-const cohortJson = (c, enrolled = 0) => ({
+const cohortJson = (c, enrolled = 0, collected = 0) => ({
   id: String(c._id),
   catalogCourse: c.catalogCourse
     ? String(c.catalogCourse._id || c.catalogCourse)
@@ -219,6 +291,7 @@ const cohortJson = (c, enrolled = 0) => ({
   notes: c.notes || "",
   sourceCourse: c.sourceCourse ? String(c.sourceCourse) : null,
   enrolledCount: enrolled,
+  moneyCollected: collected,
   sessions: (c.sessions || [])
     .map((s) => ({
       id: String(s._id),
@@ -240,33 +313,76 @@ export const listCohorts = asyncHandler(async (req, res) => {
     .populate("teacher", "fullName")
     .sort({ createdAt: -1 })
     .lean();
-  // עסקת חבילה נספרת בכל אחד מהמחזורים שלה (cohortsAll), לא רק בראשי
-  const counts = await Registration.aggregate([
-    {
-      $match: {
-        recordType: "registration",
-        $or: [{ cohort: { $ne: null } }, { "cohortsAll.0": { $exists: true } }],
-      },
-    },
-    {
-      $project: {
-        cohorts: {
-          $cond: [
-            { $gt: [{ $size: { $ifNull: ["$cohortsAll", []] } }, 0] },
-            "$cohortsAll",
-            ["$cohort"],
-          ],
-        },
-      },
-    },
-    { $unwind: "$cohorts" },
-    { $match: { cohorts: { $ne: null } } },
-    { $group: { _id: "$cohorts", n: { $sum: 1 } } },
-  ]);
-  const byCohort = new Map(counts.map((c) => [String(c._id), c.n]));
+  // ספירת נרשמים אחידה - אותה הגדרה בדיוק כמו עמוד הקורסים (enrollmentStats)
+  const { byCohort } = await enrollmentStats();
   res.json({
     success: true,
-    data: cohorts.map((c) => cohortJson(c, byCohort.get(String(c._id)) || 0)),
+    data: cohorts.map((c) => {
+      const s = byCohort.get(String(c._id));
+      return cohortJson(c, s?.count || 0, s?.collected || 0);
+    }),
+  });
+});
+
+/**
+ * GET /api/courses/overview - הנתונים לעמוד "קורסים" (כל משתמש מחובר):
+ * אותם מרצים/קורסים/מחזורים כמו בקטלוג, בלי רשומות האקסל. לנציגה הכסף לא
+ * נשלח בכלל (2026-08-17, החלטת עדן: מורן לא רואה את עמודת "נכנס מהקורס")
+ * ות.ז. של מרצים מוסתרת; הספירות מלאות לכולם.
+ */
+export const coursesOverview = asyncHandler(async (req, res) => {
+  const isRep = req.user?.role === "rep";
+  const repId = isRep ? String(req.user._id) : null;
+  const stats = await enrollmentStats({ repId });
+
+  const teachers = await Teacher.find({})
+    .sort({ fullName: 1 })
+    .collation({ locale: "he" })
+    .lean();
+  const catCourses = await CatalogCourse.find({})
+    .sort({ name: 1 })
+    .collation({ locale: "he" })
+    .lean();
+  const cohorts = await CourseCohort.find({})
+    .populate("catalogCourse", "name price defaultSessionCount")
+    .populate("teachers", "fullName")
+    .populate("teacher", "fullName")
+    .sort({ createdAt: -1 })
+    .lean();
+  const cohortsPerCourse = new Map();
+  for (const c of cohorts) {
+    const k = c.catalogCourse ? String(c.catalogCourse._id) : null;
+    if (k) cohortsPerCourse.set(k, (cohortsPerCourse.get(k) || 0) + 1);
+  }
+
+  res.json({
+    success: true,
+    data: {
+      teachers: teachers.map((t) => ({
+        id: String(t._id),
+        fullName: t.fullName,
+        phone: t.phone,
+        email: t.email,
+        idNumber: isRep ? "" : t.idNumber || "",
+        active: t.active !== false,
+        notes: t.notes || "",
+      })),
+      courses: catCourses.map((c) => {
+        const row = catalogCourseJson(
+          c,
+          cohortsPerCourse.get(String(c._id)) || 0,
+          stats.byCourse.get(String(c._id)),
+        );
+        if (isRep) delete row.moneyCollected;
+        return row;
+      }),
+      cohorts: cohorts.map((c) => {
+        const s = stats.byCohort.get(String(c._id));
+        const row = cohortJson(c, s?.count || 0, s?.collected || 0);
+        if (isRep) delete row.moneyCollected;
+        return row;
+      }),
+    },
   });
 });
 

@@ -22,6 +22,7 @@ import emailRoutes from './routes/emailRoutes.js';
 import dataReviewRoutes from './routes/dataReviewRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import quoteRoutes from './routes/quoteRoutes.js';
+import detailsFormRoutes from './routes/detailsFormRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 
@@ -68,6 +69,7 @@ app.use('/api/data-review', dataReviewRoutes); // עריכת נתונים ישנ
 app.use('/api/catalog', catalogRoutes); // קורסים/מחזורים/מרצים (יקיר - מנהל)
 app.use('/api/quotes', quoteRoutes); // הצעות מחיר שמורות + טמפלטים (כל משתמש)
 app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
+app.use('/api/details-forms', detailsFormRoutes); // ניהול טפסי השלמת פרטים (מנהל)
 
 // --- serve the built client (single-server mode) ---------------------------
 // The client's production build is copied to server/public. We serve its assets

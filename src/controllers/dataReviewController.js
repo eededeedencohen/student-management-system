@@ -294,6 +294,7 @@ async function buildDeals(filter) {
       studentName: reg.studentName || "",
       studentNumber: student?.studentNumber || null,
       repName: reg.repName || "",
+      recordType: reg.recordType || "registration",
       courseRaw: reg.courseRaw || "",
       cohortLabel: reg.cohortLabel || "",
       cohort: reg.cohort ? String(reg.cohort) : null,
@@ -365,7 +366,12 @@ async function buildDeals(filter) {
  * doesn't re-hit the server when switching tabs). `?scope=2026` limits to 2026 deals.
  */
 export const listDeals = asyncHandler(async (req, res) => {
-  const filter = { ...repFilter(req), recordType: "registration" };
+  // גם עסקאות מבוטלות מוצגות - כדי שאפשר יהיה לשייך להן מחזור (עמודת הקורס
+  // בעמוד העסקאות מקשרת אליהן לכאן); הכרטיס שלהן מסומן בצ'יפ "מבוטל".
+  const filter = {
+    ...repFilter(req),
+    recordType: { $in: ["registration", "cancelled"] },
+  };
   if (req.query.scope === "2026") filter.dealDate = { $gte: SINCE_2026 };
 
   const data = await buildDeals(filter);
