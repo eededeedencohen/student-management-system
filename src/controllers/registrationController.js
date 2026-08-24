@@ -8,6 +8,7 @@ import PaymentReceipt from "../models/PaymentReceipt.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { parseDateQuery } from "../utils/dateRanges.js";
+import { isValidIsraeliId } from "../utils/israeliId.js";
 import { applySince } from "../utils/dataScope.js";
 import {
   parseNumber,
@@ -55,7 +56,7 @@ const buildSort = (query) => {
  * בעסקת חבילה) שמצביע על מחזור שקיים בקטלוג - אותה הגדרה כמו הפילטר "שיוך מחזור"
  * בעריכת הנתונים ובקטלוג. עמוד העסקאות מציג אותם בעמודת הקורס במקום השם החופשי.
  */
-const attachAssignedCohorts = async (docs) => {
+export const attachAssignedCohorts = async (docs) => {
   const cohortIdsOf = (r) =>
     r.cohortsAll?.length ? r.cohortsAll : r.cohort ? [r.cohort] : [];
   const ids = new Set();
@@ -235,6 +236,37 @@ const findOrCreateStudent = async ({ studentName, idNumber, mobile }) => {
  * Accept full body. Find-or-create Student from studentName when no student id given.
  * Resolve repName from the rep user. recompute() before save.
  */
+/**
+ * שיוך מחזור אוטומטי מהקורס שנבחר: הקורס הישן (Course) שמקושר למחזור הוא ה-sourceCourse
+ * של המחזור. רשימות הנרשמים/הספירות/עמודת הקורס נקבעות לפי `cohort` בלבד - ולכן בחירת
+ * קורס בטופס הפנימי בלי שיוך המחזור השאירה את העסקה "לא משויכת" (העסקה של סלוא עבד
+ * אלגני, 2026-08-22). מחזיר את מסמך המחזור או null (קורס ישן שאינו מקושר למחזור).
+ */
+const cohortOfCourse = async (courseId) => {
+  if (!courseId) return null;
+  return CourseCohort.findOne({ sourceCourse: courseId })
+    .populate("catalogCourse", "name")
+    .select("label catalogCourse")
+    .lean();
+};
+
+/** מציב את המחזור על העסקה (כולל עדכון cohortsAll בעסקת חבילה, כמו ב-assignCohort). */
+const applyCohortToReg = (reg, cohort) => {
+  if (!cohort) return false;
+  if (String(reg.cohort || "") === String(cohort._id)) return false;
+  if (reg.cohortsAll?.length) {
+    const prev = String(reg.cohort || "");
+    const next = reg.cohortsAll.map((c) =>
+      String(c) === prev ? cohort._id : c,
+    );
+    if (!next.some((c) => String(c) === String(cohort._id)))
+      next.push(cohort._id);
+    reg.cohortsAll = [...new Map(next.map((c) => [String(c), c])).values()];
+  }
+  reg.cohort = cohort._id;
+  return true;
+};
+
 export const create = asyncHandler(async (req, res) => {
   const body = req.body || {};
 
@@ -351,11 +383,18 @@ export const create = asyncHandler(async (req, res) => {
       cohortLabel: cleanStr(body.cohortLabel) || courseDoc?.cohortLabel,
       dealDate: body.dealDate ? new Date(body.dealDate) : new Date(),
       discountPercent: parseNumber(body.discountPercent),
+      // מחיר עסקה מפורש (הטופס המהיר): recompute מעדיף אותו על סכום התשלומים
+      dealPrice:
+        body.dealPrice !== undefined && body.dealPrice !== ""
+          ? parseNumber(body.dealPrice)
+          : undefined,
       payments,
       paymentCategory: dominant,
       noteEntries,
       recordType: "registration",
     });
+    // הקורס שנבחר מקושר למחזור -> העסקה משויכת אליו מיד (אחרת לא תיספר כנרשם/ת)
+    applyCohortToReg(reg, await cohortOfCourse(body.course));
     reg.recompute(); // derives totalAmount/totalPaid/outstanding/status/nextPaymentDate
     await reg.save();
 
@@ -424,10 +463,220 @@ export const create = asyncHandler(async (req, res) => {
     notes: cleanStr(body.notes),
   });
 
+  applyCohortToReg(reg, await cohortOfCourse(body.course));
   reg.recompute(); // derive totalPaid/outstanding/paymentStatus/checklistComplete
   await reg.save();
 
   res.status(201).json({ success: true, data: reg });
+});
+
+/**
+ * POST /api/registrations/quick   (מנהל-העל בלבד - requireSuperAdmin במסלול)
+ * "עסקה מהירה": רק שם פרטי, שם משפחה, מין, ת.ז., מחזור קורס, תאריך, מחיר ותשלומים.
+ * התלמיד/ה נמצא/ת לפי ת.ז. (אחרת נוצר/ת עם הפרטים האלה בלבד), המחזור נפתר לקורס
+ * המקושר שלו, והשאר עובר דרך אותו מסלול יצירה v2 כמו הטופס הפנימי (כולל שיוך
+ * המחזור האוטומטי, נרמול התשלומים ואסמכתאות).
+ */
+export const quickCreate = asyncHandler(async (req, res, next) => {
+  const b = req.body || {};
+  const firstName = cleanStr(b.firstName);
+  const lastName = cleanStr(b.lastName);
+  const gender = cleanStr(b.gender);
+  const realIdNumber = cleanStr(b.realIdNumber).replace(/\D/g, "");
+  if (!firstName || !lastName) throw ApiError.badRequest("חסר שם פרטי / שם משפחה");
+  if (!["male", "female"].includes(gender)) throw ApiError.badRequest("יש לבחור מין");
+  if (!realIdNumber) throw ApiError.badRequest("חסרה תעודת זהות");
+  if (!isValidIsraeliId(realIdNumber))
+    throw ApiError.badRequest("תעודת הזהות אינה תקינה (ספרת ביקורת)");
+  if (!Array.isArray(b.payments) || b.payments.length === 0)
+    throw ApiError.badRequest("יש להזין לפחות תשלום אחד");
+  const dealPrice = parseNumber(b.dealPrice);
+  if (!(dealPrice > 0)) throw ApiError.badRequest("מחיר העסקה אינו תקין");
+  const sum = b.payments.reduce((s, p) => s + (parseNumber(p.amount) || 0), 0);
+  if (Math.abs(sum - dealPrice) > 1)
+    throw ApiError.badRequest(
+      `סך התשלומים (${sum}) חייב להשתוות למחיר העסקה (${dealPrice})`,
+    );
+
+  const cohort = await CourseCohort.findById(cleanStr(b.cohort))
+    .populate("catalogCourse", "name")
+    .lean();
+  if (!cohort) throw ApiError.badRequest("יש לבחור מחזור קורס");
+  if (!cohort.sourceCourse)
+    throw ApiError.badRequest("למחזור הזה אין קורס מקושר - לא ניתן לשייך");
+
+  // תלמיד/ה לפי ת.ז.; אם אין - נוצר/ת עם השדות המינימליים. גבר => .Mr, אישה => .Ms
+  const title = gender === "male" ? "Mr." : "Ms.";
+  const fullName = `${firstName} ${lastName}`;
+  let student = await Student.findOne({ realIdNumber });
+  let studentCreated = false;
+  if (!student) {
+    student = await Student.create({
+      fullName,
+      firstName,
+      lastName,
+      gender,
+      title,
+      realIdNumber,
+      studentNumber: await nextStudentNumber(),
+    });
+    studentCreated = true;
+  } else {
+    // קיים/ת: משלימים רק מה שחסר - לא דורסים פרטים שכבר הוזנו
+    let touched = false;
+    if (!student.gender) {
+      student.gender = gender;
+      touched = true;
+    }
+    if (!student.title) {
+      student.title = student.gender === "male" ? "Mr." : title;
+      touched = true;
+    }
+    if (!cleanStr(student.firstName) && !cleanStr(student.lastName)) {
+      student.firstName = firstName;
+      student.lastName = lastName;
+      touched = true;
+    }
+    if (touched) await student.save();
+  }
+
+  req.body = {
+    schemaVersion: 2,
+    student: student._id,
+    studentName: student.fullName || fullName,
+    rep: b.rep || undefined,
+    course: cohort.sourceCourse,
+    courseRaw: `${cohort.catalogCourse?.name || ""} ${cohort.label || ""}`.trim(),
+    cohortLabel: cohort.label || "",
+    dealDate: b.dealDate || undefined,
+    dealPrice,
+    payments: b.payments,
+    notes: cleanStr(b.notes),
+    noteEntries: [
+      {
+        text: `נוצר בטופס העסקה המהירה${studentCreated ? " (נרשם/ת חדש/ה)" : " (נרשם/ת קיים/ת לפי ת.ז.)"}`,
+        byName: req.user?.name || "",
+      },
+    ],
+  };
+  return create(req, res, next);
+});
+
+/**
+ * PUT /api/registrations/:id/courses   body: { cohorts: [cohortId, ...], deliveryModes?: {cohortId: "zoom"|"frontal"} }
+ * עריכת הקורסים של עסקה קיימת - קורס אחד או חבילה של כמה קורסים. מעדכן את כל
+ * שדות הקורס בעקביות עם יצירת חבילה בטופס החיצוני: course/coursesAll (הקורסים
+ * הישנים לדוחות), cohort/cohortsAll (השיוך הרשמי), courseRaw ("א + ב"), cohortLabel,
+ * coursesInfo (סנאפשוט לחוזה, שומר אופן השתתפות קיים), checklist.courseGroups
+ * (שומר סימון "קבוצת קורס" לקורסים שנשארו). המחיר והתשלומים אינם משתנים כאן.
+ */
+export const updateCourses = asyncHandler(async (req, res) => {
+  const reg = await Registration.findById(req.params.id);
+  if (!reg) throw ApiError.notFound("הרישום לא נמצא");
+  if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
+    throw ApiError.forbidden("אין הרשאה לערוך רישום זה");
+  }
+  const ids = [
+    ...new Set(
+      (Array.isArray(req.body?.cohorts) ? req.body.cohorts : [])
+        .map((x) => cleanStr(x))
+        .filter((x) => /^[0-9a-fA-F]{24}$/.test(x)),
+    ),
+  ];
+  if (ids.length === 0) throw ApiError.badRequest("יש לבחור לפחות מחזור קורס אחד");
+  if (ids.length > 4) throw ApiError.badRequest("עד 4 קורסים בעסקה אחת");
+
+  const found = await CourseCohort.find({ _id: { $in: ids } })
+    .populate("catalogCourse", "name price")
+    .lean();
+  const byId = new Map(found.map((c) => [String(c._id), c]));
+  const cohorts = ids.map((id) => byId.get(id)).filter(Boolean);
+  if (cohorts.length !== ids.length)
+    throw ApiError.badRequest("אחד המחזורים שנבחרו לא נמצא");
+
+  const legacyIds = cohorts.map((c) => c.sourceCourse).filter(Boolean);
+  const legacyDocs = legacyIds.length
+    ? await Course.find({ _id: { $in: legacyIds } })
+        .select("name field cohortLabel")
+        .lean()
+    : [];
+  const legacyById = new Map(legacyDocs.map((d) => [String(d._id), d]));
+
+  // אופן השתתפות לכל קורס: בחירה מפורשת בבקשה > האופן הקבוע של המחזור >
+  // מה שכבר נשמר בעסקה לקורס בשם הזה > האופן הכללי של העסקה
+  const rawModes =
+    req.body?.deliveryModes && typeof req.body.deliveryModes === "object"
+      ? req.body.deliveryModes
+      : {};
+  const prevInfo = reg.coursesInfo || [];
+  const prevModeByName = new Map(
+    prevInfo.map((ci) => [ci.name, ci.deliveryMode || ""]),
+  );
+  const perCourse = cohorts.map((c) => {
+    const legacy = c.sourceCourse
+      ? legacyById.get(String(c.sourceCourse)) || null
+      : null;
+    const name =
+      legacy?.name || `${c.catalogCourse?.name || ""}${c.label ? ` ${c.label}` : ""}`.trim();
+    const explicit = cleanStr(rawModes[String(c._id)]);
+    let mode = "";
+    if (["zoom", "frontal"].includes(explicit)) mode = explicit;
+    else if (["zoom", "frontal"].includes(c.deliveryMode)) mode = c.deliveryMode;
+    else mode = prevModeByName.get(name) || reg.deliveryMode || "";
+    return {
+      cohort: c,
+      legacy,
+      name,
+      cohortLabel: legacy?.cohortLabel || c.label || "",
+      deliveryMode: mode,
+    };
+  });
+
+  const prevText = reg.courseRaw || "";
+  const isPackage = perCourse.length > 1;
+  reg.course = perCourse[0].legacy?._id || undefined;
+  reg.coursesAll = isPackage
+    ? perCourse.map((x) => x.legacy?._id).filter(Boolean)
+    : undefined;
+  reg.cohort = perCourse[0].cohort._id;
+  reg.cohortsAll = isPackage ? perCourse.map((x) => x.cohort._id) : undefined;
+  reg.courseRaw = perCourse.map((x) => x.name).join(" + ");
+  reg.courseField =
+    perCourse[0].legacy?.field || perCourse[0].cohort.catalogCourse?.name || "";
+  reg.cohortLabel = perCourse[0].cohortLabel;
+  reg.coursesInfo = perCourse.map((x) => ({
+    name: x.name,
+    cohortLabel: x.cohortLabel,
+    deliveryMode: x.deliveryMode || undefined,
+  }));
+  const modes = new Set(perCourse.map((x) => x.deliveryMode).filter(Boolean));
+  reg.deliveryMode = modes.size === 1 ? [...modes][0] : undefined;
+
+  // צ'ק-ליסט "קבוצת קורס": בחבילה - פריט לכל קורס, שומרים סימון קיים לפי שם;
+  // קורס יחיד - חוזרים לדגל הכללי (הסימון הכללי נשאר כמו שהיה)
+  const prevGroups = new Map(
+    (reg.checklist?.courseGroups || []).map((g) => [g.name, Boolean(g.added)]),
+  );
+  if (!reg.checklist) reg.checklist = {};
+  reg.checklist.courseGroups = isPackage
+    ? perCourse.map((x, i) => ({
+        key: String(i),
+        name: x.name,
+        added: prevGroups.get(x.name) ?? false,
+      }))
+    : undefined;
+
+  reg.noteEntries.push({
+    text: `הקורסים עודכנו: "${prevText || "-"}" ← "${reg.courseRaw}"${isPackage ? ` (עסקת חבילה, ${perCourse.length} קורסים)` : ""}`,
+    date: new Date(),
+    ...(req.user?._id && req.user._id !== "admin-token" ? { by: req.user._id } : {}),
+    byName: req.user?.name || "",
+  });
+  reg.recompute();
+  await reg.save();
+  // עם assignedCohorts - עמוד התלמיד/ה ממזג את התשובה לשורה ומציג את השיוך החדש מיד
+  const [out] = await attachAssignedCohorts([reg]);
+  res.json({ success: true, data: out });
 });
 
 /**
@@ -481,7 +730,24 @@ export const update = asyncHandler(async (req, res) => {
 
   // refs / scalars handled explicitly
   if (body.student !== undefined) reg.student = body.student || undefined;
-  if (body.course !== undefined) reg.course = body.course || undefined;
+  if (body.course !== undefined) {
+    const prevCourse = String(reg.course || "");
+    reg.course = body.course || undefined;
+    // שינוי קורס בטופס = שינוי מחזור: הנרשמים נספרים לפי cohort, לא לפי course
+    if (String(reg.course || "") !== prevCourse) {
+      const cohort = await cohortOfCourse(reg.course);
+      if (applyCohortToReg(reg, cohort)) {
+        reg.noteEntries.push({
+          text: `שויך למחזור: ${cohort.catalogCourse?.name || ""} ${cohort.label || ""} (לפי הקורס שנבחר בטופס)`.trim(),
+          date: new Date(),
+          ...(req.user?._id && req.user._id !== "admin-token"
+            ? { by: req.user._id }
+            : {}),
+          byName: req.user?.name || "",
+        });
+      }
+    }
+  }
   if (body.installments !== undefined)
     reg.installments = parseNumber(body.installments);
   if (body.dateAssumed !== undefined)

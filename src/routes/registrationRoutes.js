@@ -1,5 +1,5 @@
 import express from "express";
-import { protect, scopeToRep } from "../middleware/auth.js";
+import { protect, scopeToRep, requireSuperAdmin } from "../middleware/auth.js";
 import * as ctrl from "../controllers/registrationController.js";
 
 const router = express.Router();
@@ -17,10 +17,13 @@ router.post("/:id/contract", ctrl.createContract); // יצירת חוזה לעס
 router.post("/:id/contract/upload-signed", ctrl.uploadSignedContract); // העלאת חוזה חתום סרוק
 
 router.post("/", ctrl.create);
+// עסקה מהירה (שדות מינימליים) - מנהל-העל בלבד
+router.post("/quick", requireSuperAdmin, ctrl.quickCreate);
 router.put("/:id", ctrl.update);
 
 // money + checklist sub-actions
 router.put("/:id/payment-plan", ctrl.updatePaymentPlan); // עריכת תוכנית תשלומים מלאה (v2, סכום מאוזן חובה)
+router.put("/:id/courses", ctrl.updateCourses); // עריכת הקורסים של העסקה - קורס יחיד או חבילה
 router.post("/:id/cancel", ctrl.cancelDeal); // ביטול עסקה / עדכון ביטול / שחזור
 
 router.post("/:id/payments", ctrl.addPayment);

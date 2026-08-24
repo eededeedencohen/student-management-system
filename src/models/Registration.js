@@ -320,6 +320,25 @@ registrationSchema.methods.recompute = function recompute() {
       .sort((a, b) => a - b)[0];
     this.nextPaymentDate = nextDue ? new Date(nextDue) : undefined;
     this.checklistComplete = checklistComplete;
+    // איזון (v2): המחיר מכוסה ע"י תשלומים (שולמו + עתידיים) + מחילה. עסקה מבוטלת
+    // תמיד מאוזנת - תוכנית הביטול (מה נשאר, מה מוחזר, מה לא ייגבה) היא ההגדרה
+    // של הכסף, לא המחיר המקורי (אורי לוין: מקדמה 750 נשארה, 6,150 לא ייגבו).
+    if (isCancelled) {
+      this.reconciled = true;
+      this.reconcileNote = undefined;
+    } else if (this.dealPrice > 0) {
+      const covered = paymentsSum + (this.writeOff || 0);
+      const gap = Math.round((this.dealPrice - covered) * 100) / 100;
+      this.reconciled = Math.abs(gap) <= 1;
+      this.reconcileNote = this.reconciled
+        ? undefined
+        : gap > 0
+          ? `חסר ₪${Math.round(gap).toLocaleString("he-IL")} בתוכנית התשלומים מול המחיר`
+          : `תוכנית התשלומים עולה על המחיר ב-₪${Math.round(-gap).toLocaleString("he-IL")}`;
+    } else {
+      this.reconciled = true; // בלי מחיר מפורש הסכום נגזר מהתשלומים - תמיד מאוזן
+      this.reconcileNote = undefined;
+    }
     return this;
   }
 

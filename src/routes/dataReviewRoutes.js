@@ -18,5 +18,6 @@ router.put("/students/:id", ctrl.updateStudent);
 router.put("/deals/:id/payments", ctrl.updatePayments);
 router.put("/deals/:id/cohort", ctrl.assignCohort);
 router.post("/deals/:id/approve", ctrl.approveDeal);
+router.delete("/deals/:id", ctrl.deleteDeal); // מחיקת הרשומה = מחיקת העסקה
 
 export default router;

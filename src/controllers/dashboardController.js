@@ -536,9 +536,11 @@ export const reps = asyncHandler(async (req, res) => {
  * כלומר המערכת מניחה שהכסף נכנס. לכן התזכורת החשובה היא לוודא שזה באמת קרה -
  * ואם לא, לבטל את הסימון או לרשום "הופסק". שלוש קבוצות:
  *
- *   verify  - אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
- *   due     - אמורים להיכנס עכשיו/בקרוב: לעקוב
- *   stopped - מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
+ *   verify    - אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
+ *   due       - אמורים להיכנס עכשיו/בקרוב: לעקוב
+ *   stopped   - מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
+ *   contracts - חוזים שנוצרו מהמערכת וממתינים לחתימה
+ *   receipts  - העברות בנקאיות בלי אסמכתא
  */
 export const paymentTasks = asyncHandler(async (req, res) => {
   const repId = resolveRepId(req);
@@ -627,50 +629,43 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     }
   }
 
-  // תוכניות v1 (installmentPlan) לא מאושרות אוטומטית לעולם - תשלום שמועדו עבר
-  // ועדיין 'pending' ממתין לאישור ידני של הנציגה.
-  const planRows = await Registration.aggregate([
-    { $match: { ...match, "installmentPlan.0": { $exists: true } } },
-    { $unwind: "$installmentPlan" },
-    {
-      $match: {
-        "installmentPlan.status": "pending",
-        "installmentPlan.dueDate": { $gte: since, $lte: until },
-      },
-    },
-    {
-      $project: {
-        student: 1,
-        studentName: 1,
-        courseRaw: 1,
-        courseField: 1,
-        cohortLabel: 1,
-        coursesInfo: 1,
-        repName: 1,
-        index: "$installmentPlan.index",
-        label: "$installmentPlan.label",
-        amount: "$installmentPlan.amount",
-        dueDate: "$installmentPlan.dueDate",
-        method: "$installmentPlan.method",
-      },
-    },
-    { $sort: { dueDate: 1 } },
-  ]);
-  const confirm = planRows
-    .filter((r) => new Date(r.dueDate) <= now)
-    .map((r) => ({
+  // --- חוזים שממתינים לחתימה --------------------------------------------------
+  // (החליף את "לאשר ידנית" של תוכניות v1 - ההיסטוריה נמחקה והקבוצה נשארה על 0.)
+  // רק חוזים שנוצרו מהמערכת (יש token) ועדיין pending; עסקה מבוטלת לא נכללת.
+  const contractRows = await Registration.find({
+    ...match,
+    "contract.token": { $exists: true, $ne: "" },
+    "contract.status": "pending",
+  })
+    .select(
+      "student studentName courseRaw courseField cohortLabel coursesInfo repName totalAmount dealPrice contract.createdAt contract.viewedAt contract.token",
+    )
+    .sort({ "contract.createdAt": 1 })
+    .lean();
+  const contracts = contractRows.map((r) => {
+    const createdAt = r.contract?.createdAt || null;
+    const waitingDays = createdAt
+      ? Math.max(0, Math.floor((now - new Date(createdAt)) / 864e5))
+      : 0;
+    return {
       dealId: String(r._id),
-      installmentIndex: r.index,
-      label: r.label || "",
+      paymentId: null,
       student: r.student ? String(r.student) : null,
       studentName: r.studentName || "",
       courseName: r.courseRaw || r.courseField || "",
       cohortLabel: cohortLabelOf(r),
-      amount: round2(r.amount || 0),
-      dueDate: r.dueDate,
-      method: r.method || "",
-      overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5),
-    }));
+      repName: r.repName || "",
+      amount: round2(r.dealPrice > 0 ? r.dealPrice : r.totalAmount || 0),
+      dueDate: createdAt,
+      method: "",
+      note: r.contract?.viewedAt
+        ? `הלקוח/ה פתח/ה את החוזה ב-${new Date(r.contract.viewedAt).toLocaleDateString("he-IL")} ולא חתם/ה`
+        : "הלקוח/ה עדיין לא פתח/ה את קישור החוזה",
+      contractToken: r.contract?.token || "",
+      waitingDays,
+      overdueDays: 0,
+    };
+  });
 
   // --- אסמכתאות העברה בנקאית (v2) -----------------------------------------
   // חוק: העברה בנקאית מחייבת אסמכתא - תמונה + מספר. בלי חלון זמן (חוב אסמכתא
@@ -757,19 +752,19 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     success: true,
     data: {
       verify,
-      confirm,
+      contracts,
       due,
       stopped,
       receipts,
       totals: {
         verify: verify.length,
-        confirm: confirm.length,
+        contracts: contracts.length,
         due: due.length,
         stopped: stopped.length,
         receipts: receipts.length,
-        open: verify.length + confirm.length + stopped.length + receipts.length, // מה שדורש פעולה
+        open: verify.length + contracts.length + stopped.length + receipts.length, // מה שדורש פעולה
         verifyAmount: sum(verify),
-        confirmAmount: sum(confirm),
+        contractsAmount: sum(contracts),
         dueAmount: sum(due),
         stoppedAmount: sum(stopped),
         receiptsAmount: sum(receipts),

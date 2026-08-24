@@ -3,6 +3,7 @@ import ApiError from "../utils/ApiError.js";
 import Registration from "../models/Registration.js";
 import Student from "../models/Student.js";
 import CourseCohort from "../models/CourseCohort.js";
+import Course from "../models/Course.js";
 import SourceRef from "../models/SourceRef.js";
 import SourceRow from "../models/SourceRow.js";
 import { isValidIsraeliId } from "../utils/israeliId.js";
@@ -362,15 +363,17 @@ async function buildDeals(filter) {
 
 /**
  * GET /api/data-review/deals
- * All the caller's deals in one shot (the client caches them and filters locally, so it
- * doesn't re-hit the server when switching tabs). `?scope=2026` limits to 2026 deals.
+ * The caller's deals that still lack a cohort assignment, in one shot (the client
+ * filters locally). `?scope=2026` limits to 2026 deals.
  */
 export const listDeals = asyncHandler(async (req, res) => {
-  // גם עסקאות מבוטלות מוצגות - כדי שאפשר יהיה לשייך להן מחזור (עמודת הקורס
-  // בעמוד העסקאות מקשרת אליהן לכאן); הכרטיס שלהן מסומן בצ'יפ "מבוטל".
+  // העמוד הוא רשימת "לטיפול": רק עסקאות שעדיין לא שויכו למחזור קורס. עסקה שקיבלה
+  // שיוך נעלמת מכאן (היא מנוהלת בעמוד העסקאות). גם עסקאות מבוטלות מוצגות - כדי
+  // שאפשר יהיה לשייך להן מחזור; הכרטיס שלהן מסומן בצ'יפ "מבוטל".
   const filter = {
     ...repFilter(req),
     recordType: { $in: ["registration", "cancelled"] },
+    cohort: null,
   };
   if (req.query.scope === "2026") filter.dealDate = { $gte: SINCE_2026 };
 
@@ -739,21 +742,58 @@ export const assignCohort = asyncHandler(async (req, res) => {
   );
   if (!cohort) throw ApiError.badRequest("מחזור הקורס לא נמצא");
 
-  // שומרים רק את השיוך עצמו. courseField/cohortLabel הם הערכים הקנוניים מהייבוא,
-  // שעליהם מסתמכים סינונים, ייצוא והתאמת קורסים - לא דורסים אותם.
+  // השיוך הוא האמת (כלל הבעלים: עמודת הקורס = המחזור המשויך, לא טקסט חופשי), ולכן
+  // מסנכרנים גם את שדות התצוגה/הדוחות: course (הקורס הישן המקושר), courseRaw,
+  // cohortLabel, courseField - אחרת עמוד התלמיד/ה ממשיך להציג את המחזור הישן
+  // (אוולין לוי: שויכה ל-5/26 והעמוד הראה 7/26). השם המקורי נשמר בהערה.
+  const legacy = cohort.sourceCourse
+    ? await Course.findById(cohort.sourceCourse)
+        .select("name field cohortLabel")
+        .lean()
+    : null;
+  const newName =
+    legacy?.name ||
+    `${cohort.catalogCourse?.name || ""}${cohort.label ? ` ${cohort.label}` : ""}`.trim();
+  const newLabel = legacy?.cohortLabel || cohort.label || "";
+  const prevCohortId = String(reg.cohort || "");
+  const prevText = reg.courseRaw || "";
+  const isPackage = (reg.cohortsAll?.length || 0) > 1;
   // עסקת חבילה: החלפת המחזור הראשי מעדכנת גם את רשימת המחזורים (cohortsAll)
+  // ואת הסנאפשוט של הקורס המוחלף ב-coursesInfo
   if (reg.cohortsAll?.length) {
-    const prev = String(reg.cohort || "");
     const next = reg.cohortsAll.map((c) =>
-      String(c) === prev ? cohort._id : c,
+      String(c) === prevCohortId ? cohort._id : c,
     );
     reg.cohortsAll = [
       ...new Map(next.map((c) => [String(c), c])).values(),
     ];
+    const idx = reg.cohortsAll.findIndex((c) => String(c) === String(cohort._id));
+    if (reg.coursesInfo?.[idx]) {
+      reg.coursesInfo[idx].name = newName;
+      reg.coursesInfo[idx].cohortLabel = newLabel;
+    }
+    if (legacy && reg.coursesAll?.length) {
+      const prevCourse = String(reg.course || "");
+      reg.coursesAll = reg.coursesAll.map((c) =>
+        String(c) === prevCourse ? legacy._id : c,
+      );
+    }
+    if (reg.coursesInfo?.length)
+      reg.courseRaw = reg.coursesInfo.map((ci) => ci.name).join(" + ");
   }
   reg.cohort = cohort._id;
+  if (legacy) reg.course = legacy._id;
+  if (!isPackage) {
+    reg.courseRaw = newName;
+    reg.courseField = legacy?.field || cohort.catalogCourse?.name || reg.courseField;
+    if (reg.coursesInfo?.length === 1) {
+      reg.coursesInfo[0].name = newName;
+      reg.coursesInfo[0].cohortLabel = newLabel;
+    }
+  }
+  reg.cohortLabel = newLabel; // המחזור שנבחר כאן הוא תמיד הראשי
   reg.noteEntries.push({
-    text: `שויך למחזור: ${cohort.catalogCourse?.name || ""} ${cohort.label || ""}`.trim(),
+    text: `שויך למחזור: ${cohort.catalogCourse?.name || ""} ${cohort.label || ""}${prevText && prevText !== reg.courseRaw ? ` (נרשם במקור: "${prevText}")` : ""}`.trim(),
     date: new Date(),
     ...(isRealUserId(req.user?._id) ? { by: req.user._id } : {}),
     byName: req.user?.name || "",
@@ -762,6 +802,25 @@ export const assignCohort = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: { id: String(reg._id), cohort: String(cohort._id) },
+  });
+});
+
+/**
+ * DELETE /api/data-review/deals/:id
+ * מחיקת הרשומה מעמוד עריכת הנתונים = מחיקת העסקה עצמה (אותה רשומה במסד).
+ * נציגה מוחקת רק עסקאות שלה (repFilter). מוחק גם את הפניות המקור של העסקה.
+ */
+export const deleteDeal = asyncHandler(async (req, res) => {
+  const reg = await Registration.findOne({
+    _id: req.params.id,
+    ...repFilter(req),
+  });
+  if (!reg) throw ApiError.notFound("העסקה לא נמצאה");
+  await SourceRef.deleteMany({ deal: reg._id });
+  await reg.deleteOne();
+  res.json({
+    success: true,
+    data: { id: String(reg._id), studentName: reg.studentName || "" },
   });
 });
 

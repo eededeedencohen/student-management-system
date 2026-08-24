@@ -25,14 +25,15 @@ const STUDENT_SORT_FIELDS = {
   future: "totalOutstanding", // עתידי (יתרה לגבייה)
   total: "totalDeals", // סה"כ עסקאות
   deals: "dealsCount", // מספר עסקאות
+  lastDeal: "lastDealDate", // תאריך העסקה האחרונה
 };
 
 /**
  * GET /api/students
  * חיפוש תלמידים: ?q regex על fullName / idNumber / mobile / email.
  * מצרף לכל תלמיד/ה סכומים כספיים מצטברים מהעסקאות (recordType='registration'):
- *   totalPaid (נגבה) · totalOutstanding (עתידי) · totalDeals (סה"כ) · dealsCount.
- * תומך במיון ?sortBy=fullName|paid|future|total|deals & ?order=asc|desc.
+ *   totalPaid (נגבה) · totalOutstanding (עתידי) · totalDeals (סה"כ) · dealsCount · lastDealDate.
+ * תומך במיון ?sortBy=fullName|paid|future|total|deals|lastDeal & ?order=asc|desc.
  * מחזיר { data, total, page, pages }.
  */
 export const list = asyncHandler(async (req, res) => {
@@ -110,6 +111,8 @@ export const list = asyncHandler(async (req, res) => {
         totalOutstanding: { $sum: "$deals.outstanding" },
         totalDeals: { $sum: "$deals.totalAmount" },
         dealsCount: { $size: "$deals" },
+        // תאריך העסקה האחרונה (null בלי עסקאות - במיון יורד נופל לסוף)
+        lastDealDate: { $max: "$deals.dealDate" },
         // תמצית סטטוסים + דגל בדיקה - לצ'יפים ולפילטרים בעמוד הסטודנטים
         paidCount: {
           $size: {
@@ -238,8 +241,12 @@ export const getOne = asyncHandler(async (req, res) => {
     .select("registration")
     .lean();
   const withPdf = new Set(pdfDocs.map((d) => String(d.registration)));
-  const regsOut = registrations.map((r) => ({
-    ...r.toObject(),
+  // assignedCohorts: שם הקורס/מחזור בכרטיס העסקה = המחזור המשויך בפועל (כלל הבעלים:
+  // "השמות כאן יהיו אך ורק כמו הקורסים שהם שויכו אליהם"); בלי שיוך - קישור לעריכת נתונים
+  const { attachAssignedCohorts } = await import("./registrationController.js");
+  const withCohorts = await attachAssignedCohorts(registrations);
+  const regsOut = withCohorts.map((r) => ({
+    ...r,
     contractPdfStored: withPdf.has(String(r._id)),
   }));
 
