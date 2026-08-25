@@ -72,6 +72,17 @@ export const requireFormsAccess = (req, res, next) => {
 };
 
 /**
+ * עסקה מהירה: מנהל-העל (עדן) + מי שהודלק לה quickDealAccess (מיכל).
+ * ההרשאה נבדקת על המשתמש האפקטיבי, ומנהל-העל האמיתי עובר גם ב"צפייה כ-".
+ */
+export const requireQuickDeal = (req, res, next) => {
+  const real = req.impersonator || req.user;
+  if (real?.superAdmin !== true && req.user?.quickDealAccess !== true)
+    throw ApiError.forbidden("אין הרשאה לעסקה מהירה");
+  next();
+};
+
+/**
  * Restrict to the super-admin (עדן) only, in any environment. Uses the REAL
  * user so it still applies while "viewing as" another user.
  * Used by the emails feature and the login-activity page.

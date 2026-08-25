@@ -1,5 +1,5 @@
 import express from "express";
-import { protect, scopeToRep, requireSuperAdmin } from "../middleware/auth.js";
+import { protect, scopeToRep, requireQuickDeal } from "../middleware/auth.js";
 import * as ctrl from "../controllers/registrationController.js";
 
 const router = express.Router();
@@ -17,8 +17,8 @@ router.post("/:id/contract", ctrl.createContract); // יצירת חוזה לעס
 router.post("/:id/contract/upload-signed", ctrl.uploadSignedContract); // העלאת חוזה חתום סרוק
 
 router.post("/", ctrl.create);
-// עסקה מהירה (שדות מינימליים) - מנהל-העל בלבד
-router.post("/quick", requireSuperAdmin, ctrl.quickCreate);
+// עסקה מהירה (שדות מינימליים) - מנהל-העל + בעלת quickDealAccess (מיכל)
+router.post("/quick", requireQuickDeal, ctrl.quickCreate);
 router.put("/:id", ctrl.update);
 
 // money + checklist sub-actions

@@ -46,6 +46,8 @@ const userSchema = new Schema(
     superAdmin: { type: Boolean, default: false },
     // גישה לעמוד "ניהול טפסים" גם למי שאינה מנהלת (הודלק למיכל, 2026-08-17).
     formsAccess: { type: Boolean, default: false },
+    // גישה לעמוד "עסקה מהירה" גם למי שאינה מנהלת-העל (הודלק למיכל, 2026-08-23).
+    quickDealAccess: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     // "פעיל לטסטים": משתמש שקיים רק לבדיקות - גלוי אך ורק למנהל-העל.
     // מוסתר מכל רשימות המשתמשים/הנציגות (כולל טופס העסקה) לכל שאר המשתמשים,

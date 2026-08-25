@@ -62,6 +62,8 @@ const publicUser = (user) => ({
   superAdmin: user.superAdmin === true,
   // גישה לעמוד "ניהול טפסים" למי שאינה מנהלת (מיכל)
   formsAccess: user.formsAccess === true,
+  // גישה לעמוד "עסקה מהירה" למי שאינה מנהלת-העל (מיכל)
+  quickDealAccess: user.quickDealAccess === true,
   commission: user.commission,
 });
 
