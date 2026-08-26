@@ -65,7 +65,7 @@ export function injectOgMeta(html, req) {
   const meta = ogMetaFor(req.path);
   const origin = publicOrigin(req);
   const url = `${origin}${req.originalUrl || req.path}`;
-  // JPEG < 300KB בגודל 1200x630 - התנאי של וואטסאפ לכרטיס הגדול (תמונה למעלה, טקסט מתחת)
+  // JPEG < 300KB, 1200x480 (יחס 2.5:1 - הבעלים ביקש כרטיס נמוך יותר) - וואטסאפ מציג כרטיס גדול (תמונה למעלה)
   const image = `${origin}/og-image.jpg`;
   const tags = [
     `<meta property="og:type" content="website" />`,
@@ -78,7 +78,7 @@ export function injectOgMeta(html, req) {
     `<meta property="og:image:secure_url" content="${esc(image.replace(/^http:/, "https:"))}" />`,
     `<meta property="og:image:type" content="image/jpeg" />`,
     `<meta property="og:image:width" content="1200" />`,
-    `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:image:height" content="480" />`,
     `<meta property="og:image:alt" content="${esc(SITE)}" />`,
     `<meta property="og:locale" content="he_IL" />`,
     `<meta name="description" content="${esc(meta.description)}" />`,
