@@ -13,28 +13,28 @@ const PAGES = [
   {
     test: (p) => p.startsWith("/sign/"),
     title: `חתימה דיגיטלית | ${SITE}`,
-    description: "חוזה הרשמה לחתימה דיגיטלית - מכללת ספרא, לימודים מניבים",
+    description: "חוזה הרשמה לחתימה דיגיטלית - מכללת ספרא, הבית למקצועות הטיפול והייעוץ",
   },
   {
     test: (p) => p.startsWith("/details/"),
     title: `טופס השלמת פרטים | ${SITE}`,
-    description: "השלמת פרטים אישיים לנרשמים - מכללת ספרא, לימודים מניבים",
+    description: "השלמת פרטים אישיים לנרשמים - מכללת ספרא, הבית למקצועות הטיפול והייעוץ",
   },
   {
     test: (p) => p.startsWith("/external/deal"),
     title: `טופס הרשמה | ${SITE}`,
-    description: "טופס יצירת עסקה והרשמה לקורס - מכללת ספרא, לימודים מניבים",
+    description: "טופס הרשמה לקורס - מכללת ספרא, הבית למקצועות הטיפול והייעוץ",
   },
   {
     test: (p) => p.startsWith("/quote/"),
     title: `הצעת מחיר | ${SITE}`,
-    description: "הצעת מחיר אישית - מכללת ספרא, לימודים מניבים",
+    description: "הצעת מחיר אישית - מכללת ספרא, הבית למקצועות הטיפול והייעוץ",
   },
 ];
 
 const GENERAL = {
   title: `${SITE} | מערכת ניהול`,
-  description: "מערכת הרישום והמכירות של מכללת ספרא - לימודים מניבים",
+  description: "מערכת הרישום של מכללת ספרא - הבית למקצועות הטיפול והייעוץ",
 };
 
 const esc = (s) =>
@@ -65,16 +65,21 @@ export function injectOgMeta(html, req) {
   const meta = ogMetaFor(req.path);
   const origin = publicOrigin(req);
   const url = `${origin}${req.originalUrl || req.path}`;
-  const image = `${origin}/og-image.png`;
+  // JPEG < 300KB בגודל 1200x630 - התנאי של וואטסאפ לכרטיס הגדול (תמונה למעלה, טקסט מתחת)
+  const image = `${origin}/og-image.jpg`;
   const tags = [
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="${esc(SITE)}" />`,
     `<meta property="og:title" content="${esc(meta.title)}" />`,
     `<meta property="og:description" content="${esc(meta.description)}" />`,
     `<meta property="og:url" content="${esc(url)}" />`,
+    // תמונה גדולה (1200x630 + secure_url/type) - וואטסאפ מציג אותה מעל הטקסט, לא כתמונה ממוזערת בצד
     `<meta property="og:image" content="${esc(image)}" />`,
+    `<meta property="og:image:secure_url" content="${esc(image.replace(/^http:/, "https:"))}" />`,
+    `<meta property="og:image:type" content="image/jpeg" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:image:alt" content="${esc(SITE)}" />`,
     `<meta property="og:locale" content="he_IL" />`,
     `<meta name="description" content="${esc(meta.description)}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
@@ -82,7 +87,12 @@ export function injectOgMeta(html, req) {
     `<meta name="twitter:description" content="${esc(meta.description)}" />`,
     `<meta name="twitter:image" content="${esc(image)}" />`,
   ].join("\n    ");
+  // התגים נכנסים מיד אחרי <meta charset> (בתחילת ה-head) - וואטסאפ קורא רק את
+  // תחילת המסמך, ולפני קישורי הפונטים והסקריפטים
   let out = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${esc(meta.title)}</title>`);
-  out = out.replace("</head>", `    ${tags}\n  </head>`);
+  const charset = /<meta charset="[^"]*" \/>/i.exec(out);
+  out = charset
+    ? out.replace(charset[0], `${charset[0]}\n    ${tags}`)
+    : out.replace("</head>", `    ${tags}\n  </head>`);
   return out;
 }
