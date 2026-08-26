@@ -9,6 +9,27 @@ const GRANULARITIES = ['day', 'week', 'month', 'quarter', 'half', 'year'];
 export { GRANULARITIES };
 
 /**
+ * ימים קלנדריים לפי שעון ישראל - לא מחזורי 24 שעות. "אתמול בערב" ו"היום בבוקר"
+ * הם יום אחד זה מזה גם אם עברו רק 10 שעות, וגם כשהשרת (Render) רץ ב-UTC.
+ * israelDayNumber = מספר היום הקלנדרי (Asia/Jerusalem) - הפרש בין שניים = ימים.
+ */
+const IL_DAY_FMT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Jerusalem',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+export const israelDayNumber = (date) => {
+  const x = d(date);
+  if (Number.isNaN(x.getTime())) return NaN;
+  const [y, m, day] = IL_DAY_FMT.format(x).split('-').map(Number);
+  return Math.round(Date.UTC(y, m - 1, day) / 86400000);
+};
+/** כמה ימים קלנדריים (ישראל) עברו מ-from עד to (חיובי כש-to מאוחר יותר). */
+export const israelDaysBetween = (from, to) =>
+  israelDayNumber(to) - israelDayNumber(from);
+
+/**
  * Resolve the "current time" for a request. The client may send ?asOf=YYYY-MM-DD to view
  * the data as if it were a different day ("time travel"); otherwise it's the real now.
  * Falls back to the real now on a missing/invalid value so it can never break a query.

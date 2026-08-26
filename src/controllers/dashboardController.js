@@ -8,6 +8,7 @@ import {
   bucketOf,
   GRANULARITIES,
   nowFromReq,
+  israelDaysBetween,
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
 import { cashDateOf } from "../utils/cashTiming.js";
@@ -613,17 +614,15 @@ export const paymentTasks = asyncHandler(async (req, res) => {
   const verify = [];
   const due = [];
   const stopped = [];
+  // ימים לפי שעון ישראל (קלנדריים): תשלום שמועדו היום עדיין "בקרוב"; מאתמול - "עבר"
   for (const r of rows) {
-    const past = new Date(r.dueDate) <= now;
+    const daysPast = israelDaysBetween(r.dueDate, now);
     if (r.paid) {
       // רק אישורים אוטומטיים דורשים אימות; מה שנציגה כבר אישרה ידנית - סגור
       if (isAuto(r))
         verify.push({ ...base(r), confirmedAt: r.confirmedAt, auto: true });
-    } else if (past) {
-      stopped.push({
-        ...base(r),
-        overdueDays: Math.floor((now - new Date(r.dueDate)) / 864e5),
-      });
+    } else if (daysPast > 0) {
+      stopped.push({ ...base(r), overdueDays: daysPast });
     } else {
       due.push(base(r));
     }
@@ -644,8 +643,9 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     .lean();
   const contracts = contractRows.map((r) => {
     const createdAt = r.contract?.createdAt || null;
+    // ימים קלנדריים בשעון ישראל: חוזה מאתמול בערב = "ממתין יום", לא "היום"
     const waitingDays = createdAt
-      ? Math.max(0, Math.floor((now - new Date(createdAt)) / 864e5))
+      ? Math.max(0, israelDaysBetween(createdAt, now))
       : 0;
     return {
       dealId: String(r._id),
@@ -659,7 +659,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       dueDate: createdAt,
       method: "",
       note: r.contract?.viewedAt
-        ? `הלקוח/ה פתח/ה את החוזה ב-${new Date(r.contract.viewedAt).toLocaleDateString("he-IL")} ולא חתם/ה`
+        ? `הלקוח/ה פתח/ה את החוזה ב-${new Date(r.contract.viewedAt).toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem" })} ולא חתם/ה`
         : "הלקוח/ה עדיין לא פתח/ה את קישור החוזה",
       contractToken: r.contract?.token || "",
       waitingDays,
@@ -715,7 +715,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     const hasImage = Boolean(r.receiptImage);
     const hasRef = Boolean(String(r.receiptReference || "").trim());
     const overdueDays = r.dueDate
-      ? Math.max(0, Math.floor((now - new Date(r.dueDate)) / 864e5))
+      ? Math.max(0, israelDaysBetween(r.dueDate, now))
       : 0;
     if (r.paid) {
       if (hasImage && hasRef) continue; // אסמכתא מלאה - אין משימה
@@ -735,7 +735,8 @@ export const paymentTasks = asyncHandler(async (req, res) => {
         note: [missing, r.note].filter(Boolean).join(" · "),
         overdueDays,
       });
-    } else if (r.dueDate && new Date(r.dueDate) <= now) {
+    } else if (r.dueDate && israelDaysBetween(r.dueDate, now) >= 0) {
+      // מועד ההעברה הגיע (כולל היום, לפי שעון ישראל)
       if (/הופסק/.test(r.note || "")) continue; // הוראה שבוטלה - מטופלת בקבוצות האחרות
       receipts.push({
         ...base(r),

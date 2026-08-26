@@ -1,3 +1,7 @@
+// שעון ישראל לכל חישובי הזמן המקומיים (setHours/getDate/toLocaleDateString) - גם
+// כשהשרת רץ ב-UTC (Render). חייב להיקבע לפני כל שימוש ב-Date.
+process.env.TZ = 'Asia/Jerusalem';
+
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
