@@ -1,0 +1,88 @@
+/**
+ * תצוגה מקדימה של קישורים (Open Graph) לוואטסאפ ודומיו.
+ *
+ * וואטסאפ קורא את ה-HTML של הקישור בלי להריץ JS, ולכן ה-SPA לבדו מציג רק את
+ * ה-<title> הכללי. כאן מזריקים ל-index.html תגי og:* לפי הנתיב שנשלח: כותרת
+ * ייעודית לחתימה דיגיטלית / טופס פרטים / טופס עסקה / הצעת מחיר, וכותרת כללית
+ * לכל השאר. התמונה (server/public/og-image.png, 1200x630) משותפת לכולם.
+ */
+
+const SITE = "מכללת ספרא";
+
+const PAGES = [
+  {
+    test: (p) => p.startsWith("/sign/"),
+    title: `חתימה דיגיטלית | ${SITE}`,
+    description: "חוזה הרשמה לחתימה דיגיטלית - מכללת ספרא, לימודים מניבים",
+  },
+  {
+    test: (p) => p.startsWith("/details/"),
+    title: `טופס השלמת פרטים | ${SITE}`,
+    description: "השלמת פרטים אישיים לנרשמים - מכללת ספרא, לימודים מניבים",
+  },
+  {
+    test: (p) => p.startsWith("/external/deal"),
+    title: `טופס הרשמה | ${SITE}`,
+    description: "טופס יצירת עסקה והרשמה לקורס - מכללת ספרא, לימודים מניבים",
+  },
+  {
+    test: (p) => p.startsWith("/quote/"),
+    title: `הצעת מחיר | ${SITE}`,
+    description: "הצעת מחיר אישית - מכללת ספרא, לימודים מניבים",
+  },
+];
+
+const GENERAL = {
+  title: `${SITE} | מערכת ניהול`,
+  description: "מערכת הרישום והמכירות של מכללת ספרא - לימודים מניבים",
+};
+
+const esc = (s) =>
+  String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/** כתובת הבסיס הציבורית של הבקשה (מכבד proxy כמו ב-Render). */
+export function publicOrigin(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http")
+    .split(",")[0]
+    .trim();
+  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "")
+    .split(",")[0]
+    .trim();
+  return `${proto}://${host}`;
+}
+
+export function ogMetaFor(reqPath) {
+  const p = String(reqPath || "/");
+  return PAGES.find((x) => x.test(p)) || GENERAL;
+}
+
+/** מחזיר את index.html עם <title> ותגי og:* מותאמים לנתיב. */
+export function injectOgMeta(html, req) {
+  const meta = ogMetaFor(req.path);
+  const origin = publicOrigin(req);
+  const url = `${origin}${req.originalUrl || req.path}`;
+  const image = `${origin}/og-image.png`;
+  const tags = [
+    `<meta property="og:type" content="website" />`,
+    `<meta property="og:site_name" content="${esc(SITE)}" />`,
+    `<meta property="og:title" content="${esc(meta.title)}" />`,
+    `<meta property="og:description" content="${esc(meta.description)}" />`,
+    `<meta property="og:url" content="${esc(url)}" />`,
+    `<meta property="og:image" content="${esc(image)}" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:locale" content="he_IL" />`,
+    `<meta name="description" content="${esc(meta.description)}" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:title" content="${esc(meta.title)}" />`,
+    `<meta name="twitter:description" content="${esc(meta.description)}" />`,
+    `<meta name="twitter:image" content="${esc(image)}" />`,
+  ].join("\n    ");
+  let out = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${esc(meta.title)}</title>`);
+  out = out.replace("</head>", `    ${tags}\n  </head>`);
+  return out;
+}

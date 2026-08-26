@@ -11,6 +11,8 @@ router.get('/', ctrl.list);
 router.get('/gantt', ctrl.gantt);
 // עמוד "קורסים": מרצים/קורסים/מחזורים כמו בקטלוג (לנציגה - כסף שלה בלבד)
 router.get('/overview', coursesOverview);
+// רשימת מחזורים לבחירה (עסקה מהירה / עריכת קורסים של עסקה) - לכל משתמש מחובר
+router.get('/cohort-options', ctrl.cohortOptions);
 router.get('/:id', ctrl.get);
 
 router.post('/', requireManager, ctrl.create);

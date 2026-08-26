@@ -242,14 +242,6 @@ const registrationSchema = new Schema(
     reconciled: { type: Boolean, default: true, index: true },
     reconcileNote: { type: String },
 
-    // --- עריכת נתונים ישנים: האם הנציגה עברה על העסקה, השלימה ואישרה אותה ---
-    dataReview: {
-      status: { type: String, enum: ["pending", "done"], default: "pending" },
-      by: { type: Schema.Types.ObjectId, ref: "User" },
-      byName: { type: String },
-      at: { type: Date },
-    },
-
     // --- classification (data is messy: some rows are ads / follow-ups) ---
     recordType: {
       type: String,

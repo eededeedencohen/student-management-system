@@ -32,13 +32,18 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /* ------------------------------------------------------------------ */
 
 /**
- * קורס NLP פרקטישינר - התעודה הבינלאומית מונפקת באנגלית, ולכן ההרשמה אליו
- * מחייבת שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs). הזיהוי לפי שם הקורס,
- * עמיד לכתיב מלא/חסר (פרקטישינר/פרקטישינייר) ולשם באנגלית.
+ * קורסי NLP פרקטישינר ו-NLP מאסטר - התעודה הבינלאומית מונפקת באנגלית, ולכן ההרשמה
+ * אליהם מחייבת שם פרטי ומשפחה באנגלית ופנייה (.Mr/.Ms/.Mrs). הזיהוי לפי שם הקורס,
+ * עמיד לכתיב מלא/חסר (פרקטישינר/פרקטישינייר) ולשם באנגלית. "מאסטר תרפי" אינו NLP
+ * ולכן לא נכלל (מאסטר נדרש רק יחד עם NLP בשם). נוסף מאסטר 2026-08-26 לבקשת הבעלים.
  */
-export const requiresEnglishDetails = (courseName = "") =>
-  String(courseName).replace(/י/g, "").includes("פרקטשנר") ||
-  /practitioner/i.test(String(courseName));
+export const requiresEnglishDetails = (courseName = "") => {
+  const name = String(courseName);
+  const bare = name.replace(/י/g, "");
+  if (bare.includes("פרקטשנר") || /practitioner/i.test(name)) return true;
+  const isNlp = /nlp/i.test(name) || name.includes('נל"פ') || name.includes("נלפ");
+  return isNlp && (bare.includes("מאסטר") || /master/i.test(name));
+};
 
 /**
  * הנציגות הפעילות + המחזורים שבהרשמה פתוחה - מה שהטופס צריך ותו לא.

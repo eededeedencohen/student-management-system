@@ -5,6 +5,38 @@ import Registration from "../models/Registration.js";
 import CourseCohort from "../models/CourseCohort.js";
 import { buildCourseIndex, matchDealToCourse } from "../utils/courseMatch.js";
 import { sinceOf } from "../utils/dataScope.js";
+import { teacherNamesOf } from "../utils/cohortTeachers.js";
+
+/**
+ * GET /api/courses/cohort-options - כל המחזורים לבחירה (עסקה מהירה, עריכת קורסים
+ * של עסקה). לכל משתמש מחובר (עבר מ-/api/data-review/cohorts כשעמוד עריכת הנתונים נמחק).
+ */
+export const cohortOptions = asyncHandler(async (req, res) => {
+  const cohorts = await CourseCohort.find({})
+    .populate("catalogCourse", "name price")
+    .populate("teachers", "fullName")
+    .populate("teacher", "fullName")
+    .sort({ createdAt: -1 })
+    .lean();
+  res.json({
+    success: true,
+    data: cohorts.map((c) => ({
+      id: String(c._id),
+      courseName: c.catalogCourse?.name || "(קורס נמחק)",
+      price: c.catalogCourse?.price || 0,
+      label: c.label || "",
+      // מחזור יכול להיות עם יותר ממרצה אחד - מוצגים כ"א + ב"
+      teacherName: teacherNamesOf(c),
+      status: c.status,
+      registrationOpen: c.registrationOpen,
+      sessionsCount: (c.sessions || []).length,
+      firstSession:
+        (c.sessions || [])
+          .map((s) => s.date)
+          .sort((a, b) => new Date(a) - new Date(b))[0] || null,
+    })),
+  });
+});
 
 /**
  * בקר קורסים - ניהול קורסים/מחזורים + תצוגת גאנט + רשימת נרשמים.

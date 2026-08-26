@@ -19,12 +19,12 @@ import leadRoutes from './routes/leadRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
 import externalRoutes from './routes/externalRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
-import dataReviewRoutes from './routes/dataReviewRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import quoteRoutes from './routes/quoteRoutes.js';
 import detailsFormRoutes from './routes/detailsFormRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
+import { injectOgMeta } from './utils/ogMeta.js';
 
 const app = express();
 
@@ -65,7 +65,6 @@ app.use('/api/goals', goalRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/emails', emailRoutes); // שליחת מיילים דרך Gmail (מנהל-העל בלבד)
-app.use('/api/data-review', dataReviewRoutes); // עריכת נתונים ישנים (לכל נציגה שלה)
 app.use('/api/catalog', catalogRoutes); // קורסים/מחזורים/מרצים (יקיר - מנהל)
 app.use('/api/quotes', quoteRoutes); // הצעות מחיר שמורות + טמפלטים (כל משתמש)
 app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
@@ -78,11 +77,25 @@ app.use('/api/details-forms', detailsFormRoutes); // ניהול טפסי השל�
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(__dirname, '../public');
 if (fs.existsSync(path.join(clientDist, 'index.html'))) {
-  app.use(express.static(clientDist));
+  // index.html לא מוגש סטטית - הוא עובר הזרקת תגי Open Graph לפי הנתיב (תצוגה
+  // מקדימה בוואטסאפ: חתימה / טופס פרטים / טופס עסקה / הצעת מחיר / כללי)
+  app.use(express.static(clientDist, { index: false }));
+  const indexPath = path.join(clientDist, 'index.html');
+  let indexHtml = null;
+  let indexMtime = 0;
+  const readIndex = () => {
+    const m = fs.statSync(indexPath).mtimeMs;
+    if (!indexHtml || m !== indexMtime) {
+      indexHtml = fs.readFileSync(indexPath, 'utf8');
+      indexMtime = m;
+    }
+    return indexHtml;
+  };
   app.use((req, res, next) => {
     // let the API 404 handler deal with unknown /api routes and non-GET requests
     if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-    res.sendFile(path.join(clientDist, 'index.html'));
+    res.set('Cache-Control', 'no-cache');
+    res.type('html').send(injectOgMeta(readIndex(), req));
   });
 }
 

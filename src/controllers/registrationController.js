@@ -485,8 +485,8 @@ export const quickCreate = asyncHandler(async (req, res, next) => {
   const realIdNumber = cleanStr(b.realIdNumber).replace(/\D/g, "");
   if (!firstName || !lastName) throw ApiError.badRequest("חסר שם פרטי / שם משפחה");
   if (!["male", "female"].includes(gender)) throw ApiError.badRequest("יש לבחור מין");
-  if (!realIdNumber) throw ApiError.badRequest("חסרה תעודת זהות");
-  if (!isValidIsraeliId(realIdNumber))
+  // ת.ז. אופציונלית (2026-08-26): אם הוזנה - חייבת להיות תקינה ומשמשת לזיהוי
+  if (realIdNumber && !isValidIsraeliId(realIdNumber))
     throw ApiError.badRequest("תעודת הזהות אינה תקינה (ספרת ביקורת)");
   if (!Array.isArray(b.payments) || b.payments.length === 0)
     throw ApiError.badRequest("יש להזין לפחות תשלום אחד");
@@ -505,10 +505,24 @@ export const quickCreate = asyncHandler(async (req, res, next) => {
   if (!cohort.sourceCourse)
     throw ApiError.badRequest("למחזור הזה אין קורס מקושר - לא ניתן לשייך");
 
-  // תלמיד/ה לפי ת.ז.; אם אין - נוצר/ת עם השדות המינימליים. גבר => .Mr, אישה => .Ms
+  // תלמיד/ה לפי ת.ז.; בלי ת.ז. - לפי שם מלא זהה (רק אם יש התאמה יחידה, בשני
+  // סדרי המילים); אחרת נוצר/ת עם השדות המינימליים. גבר => .Mr, אישה => .Ms
   const title = gender === "male" ? "Mr." : "Ms.";
   const fullName = `${firstName} ${lastName}`;
-  let student = await Student.findOne({ realIdNumber });
+  let student = null;
+  let matchedBy = "";
+  if (realIdNumber) {
+    student = await Student.findOne({ realIdNumber });
+    if (student) matchedBy = "ת.ז.";
+  } else {
+    const byName = await Student.find({
+      fullName: { $in: [fullName, `${lastName} ${firstName}`] },
+    }).limit(2);
+    if (byName.length === 1) {
+      student = byName[0];
+      matchedBy = "שם";
+    }
+  }
   let studentCreated = false;
   if (!student) {
     student = await Student.create({
@@ -517,7 +531,7 @@ export const quickCreate = asyncHandler(async (req, res, next) => {
       lastName,
       gender,
       title,
-      realIdNumber,
+      realIdNumber: realIdNumber || undefined,
       studentNumber: await nextStudentNumber(),
     });
     studentCreated = true;
@@ -554,7 +568,7 @@ export const quickCreate = asyncHandler(async (req, res, next) => {
     notes: cleanStr(b.notes),
     noteEntries: [
       {
-        text: `נוצר בטופס העסקה המהירה${studentCreated ? " (נרשם/ת חדש/ה)" : " (נרשם/ת קיים/ת לפי ת.ז.)"}`,
+        text: `נוצר בטופס העסקה המהירה${studentCreated ? (realIdNumber ? " (נרשם/ת חדש/ה)" : " (נרשם/ת חדש/ה, ללא ת.ז.)") : ` (נרשם/ת קיים/ת לפי ${matchedBy})`}`,
         byName: req.user?.name || "",
       },
     ],
