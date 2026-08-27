@@ -13,6 +13,7 @@ import {
 import { applySince } from "../utils/dataScope.js";
 import { cashDateOf } from "../utils/cashTiming.js";
 import { excludeTestOnly } from "../utils/testOnlyScope.js";
+import { COLLECTED_PAYMENT_STAGES } from "../utils/collectedAt.js";
 
 /**
  * Dashboard controller - KPIs for the manager (וגם נציג בודד בסקופ).
@@ -60,6 +61,48 @@ function buildRegMatch(dateFilter, repId, req) {
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /**
+ * "נגבה בתקופה" על בסיס מזומן (owner rule 2026-08-26): כל התשלומים ששולמו (ולא בוטלו)
+ * שמועד הגבייה שלהם בחלון, מכל עסקה - גם עסקאות שנסגרו לפני החלון (ERN/תשלומים
+ * עתידיים שמועדם הגיע). מפוצל: מעסקאות שנסגרו בתוך החלון / מעסקאות מתקופות אחרות.
+ * @returns {{ total, fromPeriodDeals, fromOtherPeriods, payments, deals }}
+ */
+async function collectedInWindow(dateFilter, repId, req) {
+  const match = { recordType: "registration" };
+  if (repId) match.rep = repId;
+  if (req) applySince(req, match); // מוד "מ-2026 בלבד" (לפי תאריך העסקה)
+  const pipeline = [{ $match: match }, ...COLLECTED_PAYMENT_STAGES];
+  if (dateFilter) pipeline.push({ $match: { collectedAt: dateFilter } });
+  pipeline.push({
+    $group: {
+      _id: {
+        // האם העסקה עצמה נסגרה בתוך החלון
+        inPeriod: dateFilter
+          ? {
+              $and: [
+                dateFilter.$gte ? { $gte: ["$dealDate", dateFilter.$gte] } : true,
+                dateFilter.$lt ? { $lt: ["$dealDate", dateFilter.$lt] } : true,
+              ],
+            }
+          : true,
+      },
+      amount: { $sum: { $ifNull: ["$payments.amount", 0] } },
+      payments: { $sum: 1 },
+      dealIds: { $addToSet: "$_id" },
+    },
+  });
+  const rows = await Registration.aggregate(pipeline);
+  const out = { total: 0, fromPeriodDeals: 0, fromOtherPeriods: 0, payments: 0, deals: 0 };
+  for (const r of rows) {
+    out.total += r.amount;
+    out.payments += r.payments;
+    out.deals += r.dealIds.length;
+    if (r._id.inPeriod) out.fromPeriodDeals += r.amount;
+    else out.fromOtherPeriods += r.amount;
+  }
+  return out;
+}
+
+/**
  * GET /api/dashboard/summary
  * Headline KPIs for the selected range + scope.
  */
@@ -103,6 +146,9 @@ export const summary = asyncHandler(async (req, res) => {
   };
 
   const cur = await aggregateWindow(regMatch);
+  // "נגבה" = בסיס מזומן: תשלומים שנגבו בחלון מכל עסקה (cur.collected נשאר = הגבייה
+  // המצטברת של עסקאות התקופה, לצורך "נגבה מתוך נמכר")
+  const cash = await collectedInWindow(dateFilter, repId, req);
 
   // תקופה קודמת - לחישוב דלתא בכרטיסי ה-KPI. הלקוח שולח ?prevFrom/?prevTo מפורשים
   // ("אותה נקודה בתקופה הקודמת" - הוגן לחלון של מתחילת-התקופה-עד-היום); בהיעדרם,
@@ -120,11 +166,17 @@ export const summary = asyncHandler(async (req, res) => {
     prevFilter = { $gte: new Date(from - (to - from)), $lt: from };
   }
   if (prevFilter) {
-    const p = await aggregateWindow(buildRegMatch(prevFilter, repId, req));
+    const [p, pc] = await Promise.all([
+      aggregateWindow(buildRegMatch(prevFilter, repId, req)),
+      collectedInWindow(prevFilter, repId, req),
+    ]);
     prev = {
       deals: p.deals,
       salesAmount: round2(p.salesAmount),
-      collected: round2(p.collected),
+      collected: round2(pc.total),
+      collectedFromPeriodDeals: round2(pc.fromPeriodDeals),
+      collectedFromOtherPeriods: round2(pc.fromOtherPeriods),
+      collectedOfPeriodDeals: round2(p.collected),
     };
   }
 
@@ -134,7 +186,15 @@ export const summary = asyncHandler(async (req, res) => {
       registrants: cur.students.size,
       deals: cur.deals,
       salesAmount: round2(cur.salesAmount),
-      collected: round2(cur.collected),
+      // תשלומים שנגבו בחלון לפי מועד הגבייה (בסיס מזומן, מכל עסקה) + הפיצול שלו.
+      // קוביית "מעסקאות קודמות" בדשבורד = collectedFromOtherPeriods.
+      collected: round2(cash.total),
+      collectedFromPeriodDeals: round2(cash.fromPeriodDeals),
+      collectedFromOtherPeriods: round2(cash.fromOtherPeriods),
+      collectedPayments: cash.payments,
+      collectedDeals: cash.deals,
+      // קוביית "נגבה" בדשבורד: מה שנגבה מהעסקאות שנסגרו בתקופה (מכירות - נגבה = יתרה לגבייה)
+      collectedOfPeriodDeals: round2(cur.collected),
       outstanding: round2(cur.outstanding),
       avgBasket: cur.deals > 0 ? round2(cur.salesAmount / cur.deals) : 0,
       statusDist: cur.statusDist,
@@ -297,6 +357,76 @@ export const upcomingDetail = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/dashboard/collected-detail?from&to&repId&scope=all|other|period
+ * פירוט "נגבה בתקופה": כל תשלום שנגבה (שולם, לא בוטל) שמועד הגבייה שלו בטווח, מכל
+ * עסקה. scope=other -> רק תשלומים של עסקאות שנסגרו מחוץ לטווח (ERN/עתידיים של
+ * עסקאות קודמות); scope=period -> רק עסקאות שנסגרו בטווח.
+ */
+export const collectedDetail = asyncHandler(async (req, res) => {
+  const dateFilter = parseDateQuery(req.query, nowFromReq(req));
+  const repId = resolveRepId(req);
+  const scope = ["other", "period"].includes(req.query.scope) ? req.query.scope : "all";
+  const match = { recordType: "registration" };
+  if (repId) match.rep = repId;
+  applySince(req, match);
+
+  const pipeline = [{ $match: match }, ...COLLECTED_PAYMENT_STAGES];
+  if (dateFilter) pipeline.push({ $match: { collectedAt: dateFilter } });
+  pipeline.push(
+    {
+      $project: {
+        student: 1,
+        studentName: 1,
+        repName: 1,
+        course: 1,
+        courseRaw: 1,
+        coursesInfo: 1,
+        dealDate: 1,
+        collectedAt: 1,
+        amount: "$payments.amount",
+        method: { $ifNull: ["$payments.methodCategory", "$payments.method"] },
+        type: "$payments.type",
+        confirmedByName: "$payments.confirmedByName",
+        note: "$payments.note",
+      },
+    },
+    { $sort: { collectedAt: -1, studentName: 1 } },
+    { $lookup: { from: "courses", localField: "course", foreignField: "_id", as: "courseDoc" } },
+  );
+  const rows = await Registration.aggregate(pipeline);
+  const inPeriod = (d) =>
+    !dateFilter ||
+    ((!dateFilter.$gte || d >= dateFilter.$gte) && (!dateFilter.$lt || d < dateFilter.$lt));
+  const data = rows
+    .map((r) => ({
+      dealId: r._id,
+      student: r.student,
+      studentName: r.studentName,
+      repName: r.repName,
+      courseName:
+        r.coursesInfo?.length > 1
+          ? r.coursesInfo.map((ci) => ci.name).join(" + ")
+          : r.courseDoc?.[0]?.name || r.courseRaw || null,
+      dealDate: r.dealDate,
+      dealInPeriod: Boolean(r.dealDate && inPeriod(new Date(r.dealDate))),
+      collectedAt: r.collectedAt,
+      amount: round2(r.amount || 0),
+      method: r.method || null,
+      type: r.type || null,
+      confirmedByName: r.confirmedByName || null,
+      note: r.note || null,
+    }))
+    .filter((r) => (scope === "other" ? !r.dealInPeriod : scope === "period" ? r.dealInPeriod : true));
+  res.json({
+    success: true,
+    data,
+    total: data.length,
+    sum: round2(data.reduce((a, x) => a + (x.amount || 0), 0)),
+    deals: new Set(data.map((x) => String(x.dealId))).size,
+  });
+});
+
+/**
  * GET /api/dashboard/by-course
  * העסקאות בתקופה מקובצות לפי קורס (מכירות + עסקאות), ממוין יורד - "מה נמכר".
  */
@@ -388,7 +518,8 @@ export const timeseries = asyncHandler(async (req, res) => {
   };
 
   const match = buildRegMatch(dateFilter, repId, req);
-  // מושכים מסמכים רזים בלבד עם השדות הדרושים, ומקבצים ב-JS לפי bucketOf
+  // מושכים מסמכים רזים בלבד עם השדות הדרושים, ומקבצים ב-JS לפי bucketOf (לפי תאריך העסקה -
+  // גם "נגבה" = מה שנגבה מהעסקאות של אותו דלי, כמו קוביית "נגבה" בראש הדשבורד)
   const docs = await Registration.find(match)
     .select("dealDate totalAmount totalPaid outstanding student rep")
     .lean();

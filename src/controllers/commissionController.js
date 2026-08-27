@@ -17,6 +17,7 @@ import {
 } from "../utils/dateRanges.js";
 import { applySince } from "../utils/dataScope.js";
 import { excludeTestOnly } from "../utils/testOnlyScope.js";
+import { COLLECTED_AT, collectedAtOf } from "../utils/collectedAt.js";
 
 /**
  * commissionController - חישוב שכר ועמלות לכל נציג/ה.
@@ -126,9 +127,12 @@ export function computeCommission(baseAmount, commissionConfig = {}) {
 }
 
 /**
- * Build the aggregated commission row for a single user from their deals.
+ * Build the aggregated commission row for a single user.
  * @param {object} user  Mongoose user doc (or plain object) with .commission
- * @param {{ salesAmount:number, collectedAmount:number, deals:number }} agg
+ * @param {{ salesAmount:number, deals:number, outstandingAmount:number,
+ *           collectedAmount:number, paymentsCount:number, collectedDeals:number }} agg
+ *   salesAmount/deals/outstandingAmount = עסקאות שנסגרו בתקופה (לפי dealDate);
+ *   collectedAmount/paymentsCount/collectedDeals = תשלומים שנגבו בתקופה (לפי מועד הגבייה).
  */
 function buildCommissionRow(user, agg, baseMonths = 1) {
   const commissionConfig = user.commission || {};
@@ -156,8 +160,10 @@ function buildCommissionRow(user, agg, baseMonths = 1) {
     repName: user.name,
     role: user.role,
     salesAmount,
-    collectedAmount, // בסיס הפרמיה = הכסף שנגבה בפועל
-    uncollectedAmount: Math.round((salesAmount - collectedAmount) * 100) / 100,
+    collectedAmount, // בסיס הפרמיה = התשלומים שנגבו בתקופה (לפי מועד הגבייה, מכל העסקאות)
+    paymentsCount: agg.paymentsCount || 0, // כמה תשלומים נגבו בתקופה
+    collectedDeals: agg.collectedDeals || 0, // מכמה עסקאות שונות
+    uncollectedAmount: Math.round((agg.outstandingAmount || 0) * 100) / 100, // יתרה פתוחה של עסקאות התקופה
     deals,
     base, // prorated base for the period
     baseMonthly, // the configured monthly base (for reference/tooltip)
@@ -171,11 +177,9 @@ function buildCommissionRow(user, agg, baseMonths = 1) {
 }
 
 /**
- * Aggregate registration deals per rep in the given date range.
+ * Aggregate the deals SOLD per rep in the given date range (by dealDate).
  * Counts ONLY recordType === 'registration' (revenue convention).
- * @param {object|null} dateFilter  mongo date filter for dealDate (or null)
- * @param {string|null} repIdFilter  restrict to a single rep id (or null = all)
- * @returns {Promise<Map<string, {salesAmount,collectedAmount,deals}>>} keyed by rep id
+ * @returns {Promise<Map<string, {salesAmount,deals,outstandingAmount}>>} keyed by rep id
  */
 async function aggregateDeals(dateFilter, repIdFilter, req) {
   const match = { recordType: "registration", rep: { $ne: null } };
@@ -189,7 +193,7 @@ async function aggregateDeals(dateFilter, repIdFilter, req) {
       $group: {
         _id: "$rep",
         salesAmount: { $sum: { $ifNull: ["$totalAmount", 0] } },
-        collectedAmount: { $sum: { $ifNull: ["$totalPaid", 0] } },
+        outstandingAmount: { $sum: { $ifNull: ["$outstanding", 0] } },
         deals: { $sum: 1 },
       },
     },
@@ -199,11 +203,81 @@ async function aggregateDeals(dateFilter, repIdFilter, req) {
   for (const r of rows) {
     byRep.set(String(r._id), {
       salesAmount: r.salesAmount || 0,
-      collectedAmount: r.collectedAmount || 0,
+      outstandingAmount: r.outstandingAmount || 0,
       deals: r.deals || 0,
     });
   }
   return byRep;
+}
+
+/**
+ * Aggregate the money COLLECTED per rep in the given date range - the commission
+ * base. בסיס מזומן (owner rule 2026-08-26: "השכר מורכב מהתשלומים שנגבו באותו החודש"):
+ * כל תשלום ששולם (paid, לא בוטל) שמועד הגבייה שלו בטווח נספר לנציגת העסקה,
+ * בלי קשר למועד סגירת העסקה - ERN של עסקה מיולי שנגבה באוגוסט נספר באוגוסט.
+ * @returns {Promise<Map<string, {collectedAmount,paymentsCount,collectedDeals}>>}
+ */
+async function aggregateCollected(dateFilter, repIdFilter, req) {
+  const match = { recordType: "registration", rep: { $ne: null } };
+  if (repIdFilter) match.rep = new mongoose.Types.ObjectId(repIdFilter);
+  if (req) applySince(req, match); // מוד "מ-2026 בלבד" (לפי תאריך העסקה)
+
+  const pipeline = [
+    { $match: match },
+    { $unwind: "$payments" },
+    { $match: { "payments.paid": true, "payments.canceled": { $ne: true } } },
+    { $addFields: { collectedAt: COLLECTED_AT } },
+  ];
+  if (dateFilter) pipeline.push({ $match: { collectedAt: dateFilter } });
+  pipeline.push(
+    {
+      $group: {
+        _id: "$rep",
+        collectedAmount: { $sum: { $ifNull: ["$payments.amount", 0] } },
+        paymentsCount: { $sum: 1 },
+        dealIds: { $addToSet: "$_id" },
+      },
+    },
+    {
+      $project: {
+        collectedAmount: 1,
+        paymentsCount: 1,
+        collectedDeals: { $size: "$dealIds" },
+      },
+    },
+  );
+  const rows = await Registration.aggregate(pipeline);
+  const byRep = new Map();
+  for (const r of rows) {
+    byRep.set(String(r._id), {
+      collectedAmount: r.collectedAmount || 0,
+      paymentsCount: r.paymentsCount || 0,
+      collectedDeals: r.collectedDeals || 0,
+    });
+  }
+  return byRep;
+}
+
+/** מאחד מכירות (לפי תאריך עסקה) וגבייה (לפי מועד תשלום) לשורה אחת לכל נציג/ה. */
+async function aggregateForReps(dateFilter, repIdFilter, req) {
+  const [sold, collected] = await Promise.all([
+    aggregateDeals(dateFilter, repIdFilter, req),
+    aggregateCollected(dateFilter, repIdFilter, req),
+  ]);
+  const merged = new Map();
+  for (const key of new Set([...sold.keys(), ...collected.keys()])) {
+    merged.set(key, {
+      salesAmount: 0,
+      deals: 0,
+      outstandingAmount: 0,
+      collectedAmount: 0,
+      paymentsCount: 0,
+      collectedDeals: 0,
+      ...(sold.get(key) || {}),
+      ...(collected.get(key) || {}),
+    });
+  }
+  return merged;
 }
 
 /**
@@ -229,19 +303,11 @@ export const list = asyncHandler(async (req, res) => {
     : { role: "rep", ...excludeTestOnly(req) };
   const users = await User.find(userQuery);
 
-  const byRep = await aggregateDeals(dateFilter, repIdFilter, req);
+  const byRep = await aggregateForReps(dateFilter, repIdFilter, req);
 
   const data = users
     .map((user) =>
-      buildCommissionRow(
-        user,
-        byRep.get(String(user._id)) || {
-          salesAmount: 0,
-          collectedAmount: 0,
-          deals: 0,
-        },
-        baseMonths,
-      ),
+      buildCommissionRow(user, byRep.get(String(user._id)) || {}, baseMonths),
     )
     .sort((a, b) => b.salesAmount - a.salesAmount);
 
@@ -269,14 +335,8 @@ export const detail = asyncHandler(async (req, res) => {
   if (!user) throw ApiError.notFound("נציג/ה לא נמצא/ה");
 
   const { dateFilter, baseMonths } = resolvePeriod(req.query, nowFromReq(req));
-  const byRep = await aggregateDeals(dateFilter, repId, req);
-  const agg = byRep.get(String(repId)) || {
-    salesAmount: 0,
-    collectedAmount: 0,
-    deals: 0,
-  };
-
-  const data = buildCommissionRow(user, agg, baseMonths);
+  const byRep = await aggregateForReps(dateFilter, repId, req);
+  const data = buildCommissionRow(user, byRep.get(String(repId)) || {}, baseMonths);
   res.json({ success: true, data });
 });
 
@@ -317,21 +377,39 @@ export const trend = asyncHandler(async (req, res) => {
   applySince(req, match); // מוד "מ-2026 בלבד" - מצמצם את $gte ל-1.1.2026 בלי לגעת ב-$lt
   const effFrom = match.dealDate.$gte; // תחילת הטווח בפועל (אחרי קיצוץ 2026)
 
-  const rows = await Registration.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: {
-          rep: "$rep",
-          y: { $year: "$dealDate" },
-          m: { $month: "$dealDate" },
-        },
-        deals: { $sum: 1 },
-        salesAmount: { $sum: { $ifNull: ["$totalAmount", 0] } },
-        collected: { $sum: { $ifNull: ["$totalPaid", 0] } },
-      },
-    },
-  ]);
+  // "נגבה" = לפי מועד הגבייה של כל תשלום (בסיס מזומן); עסקאות/מכירות = לפי תאריך העסקה
+  // לגבייה: מסננים עסקאות רק לפי נציגה/סוג (ומוד 2026), והחודש נקבע לפי מועד התשלום
+  const collectedMatch = { recordType: "registration", rep: match.rep };
+  applySince(req, collectedMatch);
+  const rows =
+    metric === "collected"
+      ? await Registration.aggregate([
+          { $match: collectedMatch },
+          { $unwind: "$payments" },
+          { $match: { "payments.paid": true, "payments.canceled": { $ne: true } } },
+          { $addFields: { collectedAt: COLLECTED_AT } },
+          { $match: { collectedAt: { $gte: effFrom, $lt: to } } },
+          {
+            $group: {
+              _id: { rep: "$rep", y: { $year: "$collectedAt" }, m: { $month: "$collectedAt" } },
+              collected: { $sum: { $ifNull: ["$payments.amount", 0] } },
+            },
+          },
+        ])
+      : await Registration.aggregate([
+          { $match: match },
+          {
+            $group: {
+              _id: {
+                rep: "$rep",
+                y: { $year: "$dealDate" },
+                m: { $month: "$dealDate" },
+              },
+              deals: { $sum: 1 },
+              salesAmount: { $sum: { $ifNull: ["$totalAmount", 0] } },
+            },
+          },
+        ]);
 
   // sidecar יציב (סדר הצטרפות = _id) לצבעים עקביים
   const userQuery = repIdFilter
@@ -402,48 +480,69 @@ export const breakdown = asyncHandler(async (req, res) => {
     recordType: "registration",
     rep: new mongoose.Types.ObjectId(repId),
   };
-  if (dateFilter) match.dealDate = dateFilter;
-  applySince(req, match); // מוד "מ-2026 בלבד"
+  applySince(req, match); // מוד "מ-2026 בלבד" (לפי תאריך העסקה)
 
+  // כל עסקאות הנציג/ה - הפירוט הוא לפי תשלומים שמועד הגבייה שלהם בטווח, מכל עסקה
   const deals = await Registration.find(match)
     .select(
-      "externalId studentName student courseRaw courseField course coursesInfo dealDate totalAmount totalPaid outstanding paymentStatus",
+      "externalId studentName student courseRaw courseField course coursesInfo dealDate totalAmount totalPaid outstanding paymentStatus payments",
     )
     .populate("course", "name")
-    .sort({ dealDate: -1 })
     .lean();
 
   const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-  const collectedTotal = deals.reduce((a, d) => a + (d.totalPaid || 0), 0);
-  const salesTotal = deals.reduce((a, d) => a + (d.totalAmount || 0), 0);
-  // האחוז נבחר לפי הכסף שנגבה (כסף שטרם נגבה לא מקפיץ מדרגה)
-  const { commissionRate } = computeCommission(
-    collectedTotal,
-    user.commission || {},
-  );
+  const inRange = (d) => {
+    if (!d) return false;
+    if (!dateFilter) return true;
+    const t = new Date(d);
+    if (dateFilter.$gte && t < dateFilter.$gte) return false;
+    if (dateFilter.$lt && t >= dateFilter.$lt) return false;
+    return true;
+  };
+  const courseNameOf = (d) =>
+    d.coursesInfo?.length > 1
+      ? d.coursesInfo.map((ci) => ci.name).join(" + ")
+      : d.course?.name || d.courseRaw || d.courseField || "";
 
-  const items = deals.map((d) => {
-    const collected = round2(d.totalPaid || 0);
-    const counted = collected > 0.5; // רק כסף שנגבה בפועל נכנס לפרמיה
-    return {
-      id: d._id,
-      externalId: d.externalId,
-      student: d.student,
-      studentName: d.studentName,
-      // עסקת חבילה: כל שמות הקורסים; אחרת הקורס המקושר
-      course:
-        d.coursesInfo?.length > 1
-          ? d.coursesInfo.map((ci) => ci.name).join(" + ")
-          : d.course?.name || d.courseRaw || d.courseField || "",
-      dealDate: d.dealDate,
-      totalAmount: round2(d.totalAmount || 0),
-      collected,
-      outstanding: round2(d.outstanding || 0),
-      paymentStatus: d.paymentStatus,
-      counted,
-      premiumContribution: round2(collected * commissionRate),
-    };
-  });
+  // שורה לכל תשלום שמועדו בטווח: נגבה (נספר) או מתוזמן שלא נגבה (לא נספר, למידע)
+  const rows = [];
+  for (const d of deals) {
+    for (const p of d.payments || []) {
+      if (p.canceled) continue;
+      const collectedAt = collectedAtOf(p, d);
+      if (!inRange(collectedAt)) continue;
+      rows.push({
+        id: `${d._id}:${p._id}`,
+        dealId: d._id,
+        externalId: d.externalId,
+        student: d.student,
+        studentName: d.studentName,
+        course: courseNameOf(d),
+        dealDate: d.dealDate,
+        collectedAt,
+        method: p.methodCategory || p.method || "",
+        type: p.type || "",
+        amount: round2(p.amount || 0),
+        counted: Boolean(p.paid),
+        confirmedByName: p.confirmedByName || "",
+        note: p.note || "",
+      });
+    }
+  }
+  rows.sort((a, b) => new Date(b.collectedAt) - new Date(a.collectedAt));
+
+  const collectedTotal = rows.filter((r) => r.counted).reduce((a, r) => a + r.amount, 0);
+  const scheduledUncollected = rows.filter((r) => !r.counted).reduce((a, r) => a + r.amount, 0);
+  // מכירות בתקופה (לפי תאריך עסקה) - להשוואה בלבד, לא בסיס הפרמיה
+  const soldInPeriod = deals.filter((d) => inRange(d.dealDate));
+  const salesTotal = soldInPeriod.reduce((a, d) => a + (d.totalAmount || 0), 0);
+  // האחוז נבחר לפי הכסף שנגבה (כסף שטרם נגבה לא מקפיץ מדרגה)
+  const { commissionRate } = computeCommission(collectedTotal, user.commission || {});
+
+  const items = rows.map((r) => ({
+    ...r,
+    premiumContribution: r.counted ? round2(r.amount * commissionRate) : 0,
+  }));
 
   res.json({
     success: true,
@@ -452,11 +551,13 @@ export const breakdown = asyncHandler(async (req, res) => {
       repName: user.name,
       commissionRate,
       salesTotal: round2(salesTotal),
-      collectedTotal: round2(collectedTotal), // בסיס הפרמיה
-      uncollectedTotal: round2(salesTotal - collectedTotal),
+      soldCount: soldInPeriod.length,
+      collectedTotal: round2(collectedTotal), // בסיס הפרמיה = תשלומים שנגבו בתקופה
+      scheduledUncollected: round2(scheduledUncollected), // תשלומים שמועדם בטווח וטרם נגבו
       premiumTotal: round2(collectedTotal * commissionRate),
       countedCount: items.filter((x) => x.counted).length,
       notCountedCount: items.filter((x) => !x.counted).length,
+      dealsCount: new Set(items.filter((x) => x.counted).map((x) => String(x.dealId))).size,
       items,
     },
   });
