@@ -920,6 +920,16 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
       return;
     }
 
+    // ביטול סימון "שולם" בעורך = הכסף לא נכנס: הו"ק כזו לא תאושר אוטומטית שוב.
+    // תשלום פתוח שנשאר באותו מועד שומר על החסימה שלו; הזזת התאריך מחדשת את הגבייה
+    // האוטומטית (הבטחה חדשה).
+    const unmarkedNow = Boolean(prev && prev.paid && !paid);
+    const keepBlock = Boolean(
+      prev &&
+        !prev.paid &&
+        prev.noAutoConfirm &&
+        dayOf(prev.dueDate) === dayOf(dueDate),
+    );
     rows.push({
       ...(prev
         ? {
@@ -938,6 +948,7 @@ export const updatePaymentPlan = asyncHandler(async (req, res) => {
       paid,
       installments,
       note,
+      noAutoConfirm: !paid && (unmarkedNow || keepBlock) ? true : undefined,
       // תשלום שהפך לשולם בעריכה זו נחתם על שם העורך; ביטול סימון מנקה את האישור
       confirmedBy: paid ? uid : undefined,
       confirmedByName: paid ? uname : undefined,
@@ -1373,6 +1384,7 @@ export const markPaymentPaid = asyncHandler(async (req, res) => {
   }
   if (!p.paid) {
     p.paid = true;
+    p.noAutoConfirm = undefined; // סימון ידני סוגר את החסימה שנוצרה בביטול קודם
     p.confirmedBy =
       req.user?._id && req.user._id !== "admin-token"
         ? req.user._id
@@ -1516,6 +1528,9 @@ export const unmarkPaymentPaid = asyncHandler(async (req, res) => {
     p.confirmedBy = undefined;
     p.confirmedByName = undefined;
     p.confirmedAt = undefined;
+    // ביטול ידני = הכסף לא נכנס: הו"ק שמועדה עבר לא תסומן אוטומטית שוב
+    // (אחרת ה-pre-save / הריצה השעתית היו מחזירים את הסימון מיד)
+    p.noAutoConfirm = true;
     reg.recompute();
     await reg.save();
   }

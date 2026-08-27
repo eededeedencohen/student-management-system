@@ -14,9 +14,14 @@ const { default: app } = await import('./app.js');
 const { autoConfirmDueErn } = await import('./utils/ernAutoConfirm.js');
 
 const PORT = process.env.PORT || 5000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
-/** תשלומי ERN שמועדם עבר נגבים אוטומטית (הכסף נכנס ביום החיוב גם בלי ✓ ידני). */
+/**
+ * הוראות קבע שמועדן עבר נגבות אוטומטית (הכסף יורד ביום החיוב גם בלי ✓ ידני; רק הו"ק -
+ * owner rule 2026-08-27). עסקה שנשמרת עם הו"ק שמועדה כבר עבר מסומנת מיד ב-pre-save של
+ * המודל; הריצה כאן סוגרת את מה שהגיע מועדו מאז - כל שעה, כדי שחיוב של היום ייסגר
+ * בבוקר ולא "מתי שהשרת עלה + 24 שעות".
+ */
 const runErnAutoConfirm = async () => {
   try {
     const { flipped, deals } = await autoConfirmDueErn();
@@ -37,7 +42,7 @@ const start = async () => {
     }
     await connectDB();
     await runErnAutoConfirm(); // בעליית השרת
-    setInterval(runErnAutoConfirm, DAY_MS).unref(); // ואחת ליום כל עוד השרת רץ
+    setInterval(runErnAutoConfirm, HOUR_MS).unref(); // וכל שעה כל עוד השרת רץ
     app.listen(PORT, () => {
       console.log(`🚀  Safra API listening on http://localhost:${PORT}`);
     });

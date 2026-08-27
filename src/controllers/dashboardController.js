@@ -14,6 +14,7 @@ import { applySince } from "../utils/dataScope.js";
 import { cashDateOf } from "../utils/cashTiming.js";
 import { excludeTestOnly } from "../utils/testOnlyScope.js";
 import { isErnPayment } from "../utils/ernAutoConfirm.js";
+import { RECEIPTS_LAUNCH } from "../utils/premiumHold.js";
 import { COLLECTED_PAYMENT_STAGES } from "../utils/collectedAt.js";
 
 /**
@@ -857,7 +858,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
   ]);
   // חתך השקה: חובת האסמכתא נכנסה לתוקף ב-4/8/2026. העברות ותיקות ששולמו
   // לפני כן לא מוצפות רטרואקטיבית (אפשר עדיין לצרף להן אסמכתא בעמוד הסטודנט).
-  const RECEIPTS_LAUNCH = new Date("2026-08-04T00:00:00Z");
+  // חתך ההשקה משותף עם "מצב מחמיר" בפרמיות: utils/premiumHold.js (RECEIPTS_LAUNCH)
   const receipts = [];
   for (const r of receiptRows) {
     const hasImage = Boolean(r.receiptImage);

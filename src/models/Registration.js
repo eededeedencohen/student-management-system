@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { applyDueErn } from "../utils/ernRules.js";
 
 const { Schema } = mongoose;
 
@@ -26,6 +27,9 @@ const paymentSchema = new Schema(
     confirmedBy: { type: Schema.Types.ObjectId, ref: "User" }, // who pressed "סמן כשולם"
     confirmedByName: { type: String },
     confirmedAt: { type: Date },
+    // נציג/ה ביטל/ה ידנית סימון "שולם" (הכסף לא ירד): הו"ק כזו לא תאושר אוטומטית שוב.
+    // הזזת התאריך בעורך התוכנית או "סמן כשולם" מנקים את הדגל. (utils/ernRules.js)
+    noAutoConfirm: { type: Boolean },
     // --- legacy fields (v1 imported deals) ------------------------------------
     installments: { type: Number }, // מספר תשלומים (לכ.א.)
     date: { type: Date }, // actual paid date (legacy)
@@ -267,6 +271,14 @@ const registrationSchema = new Schema(
 );
 
 /** Recompute derived money + status fields. */
+// חוק הו"ק (owner rule 2026-08-27, utils/ernRules.js): הוראת קבע שמועדה עבר נחשבת
+// שנגבתה - נאכף בכל שמירה (יצירה מטופס, עריכת תוכנית, חתימה...) ולא רק בריצה
+// התקופתית, כדי שעסקה שנוצרת עם הו"ק שמועדה כבר עבר תסומן מיד. מדלג על "הופסק",
+// על ביטול ידני (noAutoConfirm) ועל תשלומים שבוטלו בביטול עסקה.
+registrationSchema.pre("save", function applyErnRule() {
+  if (applyDueErn(this) > 0) this.recompute();
+});
+
 registrationSchema.methods.recompute = function recompute() {
   const c0 = this.checklist || {};
   // עסקת חבילה: הדגל הכללי "קבוצת קורס" = כל קבוצות הקורסים סומנו

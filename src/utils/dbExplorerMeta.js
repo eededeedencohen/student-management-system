@@ -52,7 +52,7 @@ export const FIELD_HE = {
   advancePaid: "מקדמה ששולמה", balanceDue: "יתרה לתשלום", finalBalance: "יתרה סופית", amountExVat: "סכום ללא מע\"מ", vatAmount: "מע\"מ",
   primaryPaymentMethod: "אופן תשלום ראשי", installmentPlan: "לוח תשלומים (ישן)", payments: "תשלומים",
   type: "סוג", amount: "סכום", method: "אופן תשלום", methodCategory: "קטגוריית אופן תשלום", dueDate: "מועד", paid: "שולם",
-  canceled: "בוטל", addedOnCancel: "נוסף בביטול", confirmedBy: "אושר ע\"י", confirmedByName: "שם המאשר/ת", confirmedAt: "אושר ב",
+  canceled: "בוטל", addedOnCancel: "נוסף בביטול", confirmedBy: "אושר ע\"י", confirmedByName: "שם המאשר/ת", confirmedAt: "אושר ב", noAutoConfirm: "ללא אישור אוטומטי (בוטל ידנית)",
   receiptReference: "מספר אסמכתא", receiptImage: "יש תמונת אסמכתא", receiptUploadedAt: "אסמכתא הועלתה ב", receiptUploadedByName: "מי העלה אסמכתא",
   note: "הערה", date: "תאריך", dateRaw: "תאריך גולמי", kind: "סוג", source: "מקור", index: "אינדקס", count: "כמות", label: "תווית",
   paidAt: "שולם ב", sourceRow: "שורת מקור", sourceFile: "קובץ מקור", sourceSheet: "גיליון מקור",
