@@ -13,6 +13,7 @@ import {
 import { applySince } from "../utils/dataScope.js";
 import { cashDateOf } from "../utils/cashTiming.js";
 import { excludeTestOnly } from "../utils/testOnlyScope.js";
+import { isErnPayment } from "../utils/ernAutoConfirm.js";
 import { COLLECTED_PAYMENT_STAGES } from "../utils/collectedAt.js";
 
 /**
@@ -664,13 +665,15 @@ export const reps = asyncHandler(async (req, res) => {
  * GET /api/dashboard/payment-tasks
  * "משימות גבייה" - התזכורות של הנציגה בדשבורד.
  *
- * הרקע: תשלום מתוזמן שהמועד שלו עבר מסומן כנגבה אוטומטית (utils/ernAutoConfirm.js),
- * כלומר המערכת מניחה שהכסף נכנס. לכן התזכורת החשובה היא לוודא שזה באמת קרה -
- * ואם לא, לבטל את הסימון או לרשום "הופסק". שלוש קבוצות:
+ * הרקע: הוראת קבע שהמועד שלה עבר מסומנת כנגבה אוטומטית (utils/ernAutoConfirm.js),
+ * כלומר המערכת מניחה שהכסף נכנס - לכן צריך לוודא שזה באמת קרה, ואם לא, לבטל את
+ * הסימון או לרשום "הופסק". כל תשלום אחר (אשראי/העברה/מזומן; מ-2026-08-27) לא מסומן
+ * אוטומטית - כשמועדו עבר הוא ממתין לאישור ידני של הנציג/ה. הקבוצות:
  *
- *   verify    - אושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שה-ERN נכנס"
+ *   verify    - הו"ק שאושרו אוטומטית לאחרונה (עדיין לא אושרו ידנית): "לוודא שנכנס"
+ *   confirm   - לא-הו"ק שמועדם עבר ועדיין פתוחים: "לאשר גבייה" (בלי חלון זמן - חוב לא מתיישן)
  *   due       - אמורים להיכנס עכשיו/בקרוב: לעקוב
- *   stopped   - מועדם עבר ולא אושרו (הערה מכילה "הופסק"): דורשים טיפול
+ *   stopped   - הו"ק שמועדה עבר ולא אושרה (הערה מכילה "הופסק"): דורשת טיפול (בלי חלון זמן)
  *   contracts - חוזים שנוצרו מהמערכת וממתינים לחתימה
  *   receipts  - העברות בנקאיות בלי אסמכתא
  */
@@ -695,8 +698,18 @@ export const paymentTasks = asyncHandler(async (req, res) => {
   const rows = await Registration.aggregate([
     { $match: match },
     { $unwind: { path: "$payments", includeArrayIndex: "payIndex" } },
-    // כל התשלומים שמועדם בטווח הרלוונטי (אחורה לאימות, קדימה למעקב)
-    { $match: { "payments.dueDate": { $gte: since, $lte: until } } },
+    // תשלומים שמועדם בטווח הרלוונטי (אחורה לאימות, קדימה למעקב); תשלום פתוח שמועדו
+    // עבר נכלל תמיד, גם מעבר לחלון - חוב לא מתיישן (לאשר גבייה / הו"ק שהופסקה)
+    {
+      $match: {
+        "payments.dueDate": { $lte: until },
+        "payments.canceled": { $ne: true },
+        $or: [
+          { "payments.dueDate": { $gte: since } },
+          { "payments.paid": { $ne: true } },
+        ],
+      },
+    },
     {
       $project: {
         paymentId: "$payments._id",
@@ -743,6 +756,7 @@ export const paymentTasks = asyncHandler(async (req, res) => {
   });
 
   const verify = [];
+  const confirm = [];
   const due = [];
   const stopped = [];
   // ימים לפי שעון ישראל (קלנדריים): תשלום שמועדו היום עדיין "בקרוב"; מאתמול - "עבר"
@@ -753,7 +767,10 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       if (isAuto(r))
         verify.push({ ...base(r), confirmedAt: r.confirmedAt, auto: true });
     } else if (daysPast > 0) {
-      stopped.push({ ...base(r), overdueDays: daysPast });
+      // מועד עבר ולא נגבה: הו"ק = כנראה הופסקה (דורש טיפול); כל אמצעי אחר לא מאושר
+      // אוטומטית (מ-2026-08-27) - ממתין שהנציג/ה יסמן/תסמן שהכסף נכנס
+      if (isErnPayment(r)) stopped.push({ ...base(r), overdueDays: daysPast });
+      else confirm.push({ ...base(r), overdueDays: daysPast });
     } else {
       due.push(base(r));
     }
@@ -884,18 +901,26 @@ export const paymentTasks = asyncHandler(async (req, res) => {
     success: true,
     data: {
       verify,
+      confirm,
       contracts,
       due,
       stopped,
       receipts,
       totals: {
         verify: verify.length,
+        confirm: confirm.length,
         contracts: contracts.length,
         due: due.length,
         stopped: stopped.length,
         receipts: receipts.length,
-        open: verify.length + contracts.length + stopped.length + receipts.length, // מה שדורש פעולה
+        open:
+          verify.length +
+          confirm.length +
+          contracts.length +
+          stopped.length +
+          receipts.length, // מה שדורש פעולה
         verifyAmount: sum(verify),
+        confirmAmount: sum(confirm),
         contractsAmount: sum(contracts),
         dueAmount: sum(due),
         stoppedAmount: sum(stopped),
