@@ -22,7 +22,9 @@ import {
   HELD_CONTRACT_EXPR,
   HELD_RECEIPT_EXPR,
   HELD_EXPR,
+  DEAL_HELD_EXPR,
   holdReasonOf,
+  dealHoldReason,
 } from "../utils/premiumHold.js";
 
 /** ?strict=1 - "מצב מחמיר": גבייה של חוזה לא חתום / העברה בלי אסמכתא לא נספרת. */
@@ -146,11 +148,22 @@ export function computeCommission(baseAmount, commissionConfig = {}) {
  */
 function buildCommissionRow(user, agg, baseMonths = 1, strict = false) {
   const commissionConfig = user.commission || {};
-  const salesAmount = agg.salesAmount || 0;
-  const deals = agg.deals || 0;
 
-  // מצב מחמיר (owner 2026-08-27): גבייה של עסקה שהחוזה שלה טרם נחתם, והעברה בלי
-  // אסמכתא, "מוחזקות" - לא נכנסות לבסיס הפרמיה עד שהעניין יוסדר. במצב רגיל הכל נספר.
+  // מצב מחמיר (owner 2026-08-27): עסקה שהחוזה שלה טרם נחתם, או שיש בה העברה בלי
+  // אסמכתא, "מוחזקת" - לא נספרת במכירות/עסקאות/יתרה של התקופה ("המכירות לא נחשבות
+  // אם הן מוחזקות או לא מאושרות"), כדי שהיחס שכר/הכנסה יחושב על אותו בסיס כמו השכר.
+  const salesGross = money(agg.salesAmount || 0);
+  const heldSalesAmount = money(agg.heldSalesAmount || 0);
+  const heldDealsCount = agg.heldDealsCount || 0;
+  const salesAmount = strict ? money(salesGross - heldSalesAmount) : salesGross;
+  const dealsGross = agg.deals || 0;
+  const deals = strict ? Math.max(dealsGross - heldDealsCount, 0) : dealsGross;
+  const outstandingBase = strict
+    ? (agg.outstandingAmount || 0) - (agg.heldOutstandingAmount || 0)
+    : agg.outstandingAmount || 0;
+
+  // וגבייה של עסקה כזו (או העברה בלי אסמכתא) "מוחזקת" - לא נכנסת לבסיס הפרמיה עד
+  // שהעניין יוסדר. במצב רגיל הכל נספר.
   const collectedGross = money(agg.collectedAmount || 0); // כל מה שנגבה בתקופה
   const heldContractAmount = money(agg.heldContractAmount || 0);
   const heldReceiptAmount = money(agg.heldReceiptAmount || 0);
@@ -196,7 +209,11 @@ function buildCommissionRow(user, agg, baseMonths = 1, strict = false) {
     repName: user.name,
     role: user.role,
     strict,
-    salesAmount,
+    salesAmount, // מכירות התקופה (במצב מחמיר בלי העסקאות המוחזקות)
+    salesGross, // כל מכירות התקופה, כולל המוחזקות
+    heldSalesAmount, // מכירות של עסקאות מוחזקות (חוזה ממתין / העברה בלי אסמכתא)
+    heldDealsCount,
+    dealsGross,
     collectedAmount, // בסיס הפרמיה = התשלומים שנגבו בתקופה (לפי מועד הגבייה, מכל העסקאות; במצב מחמיר בלי המוחזק)
     collectedGross, // כל מה שנגבה בתקופה, כולל המוחזק
     heldAmount, // מוחזק במצב מחמיר (במצב רגיל - למידע בלבד, נספר)
@@ -207,7 +224,7 @@ function buildCommissionRow(user, agg, baseMonths = 1, strict = false) {
     heldReceiptCount: agg.heldReceiptCount || 0,
     paymentsCount, // כמה תשלומים נספרו בתקופה
     collectedDeals, // מכמה עסקאות שונות
-    uncollectedAmount: money(agg.outstandingAmount || 0), // יתרה פתוחה של עסקאות התקופה
+    uncollectedAmount: money(outstandingBase), // יתרה פתוחה של עסקאות התקופה (במצב מחמיר בלי המוחזקות)
     scheduledUncollected, // תשלומים שמועדם בתקופה וטרם נגבו (מכל העסקאות)
     scheduledUncollectedCount: agg.scheduledUncollectedCount || 0,
     potentialCollected, // בסיס הפרמיה אילו גם הם היו נגבים
@@ -237,14 +254,21 @@ async function aggregateDeals(dateFilter, repIdFilter, req) {
   if (repIdFilter) match.rep = new mongoose.Types.ObjectId(repIdFilter);
   if (req) applySince(req, match); // מוד "מ-2026 בלבד"
 
+  const amt = { $ifNull: ["$totalAmount", 0] };
+  const out = { $ifNull: ["$outstanding", 0] };
   const rows = await Registration.aggregate([
     { $match: match },
+    // עסקה מוחזקת (מצב מחמיר, utils/premiumHold.js) - נצבר תמיד, מופחת רק ב-strict
+    { $addFields: { dealHeld: DEAL_HELD_EXPR } },
     {
       $group: {
         _id: "$rep",
-        salesAmount: { $sum: { $ifNull: ["$totalAmount", 0] } },
-        outstandingAmount: { $sum: { $ifNull: ["$outstanding", 0] } },
+        salesAmount: { $sum: amt },
+        outstandingAmount: { $sum: out },
         deals: { $sum: 1 },
+        heldSalesAmount: { $sum: { $cond: ["$dealHeld", amt, 0] } },
+        heldOutstandingAmount: { $sum: { $cond: ["$dealHeld", out, 0] } },
+        heldDealsCount: { $sum: { $cond: ["$dealHeld", 1, 0] } },
       },
     },
   ]);
@@ -255,6 +279,9 @@ async function aggregateDeals(dateFilter, repIdFilter, req) {
       salesAmount: r.salesAmount || 0,
       outstandingAmount: r.outstandingAmount || 0,
       deals: r.deals || 0,
+      heldSalesAmount: r.heldSalesAmount || 0,
+      heldOutstandingAmount: r.heldOutstandingAmount || 0,
+      heldDealsCount: r.heldDealsCount || 0,
     });
   }
   return byRep;
@@ -515,6 +542,10 @@ export const trend = asyncHandler(async (req, res) => {
   const strictStages = strictOf(req.query)
     ? [{ $match: { $expr: { $not: [HELD_EXPR] } } }]
     : [];
+  // ומכירות/עסקאות בלי העסקאות המוחזקות (חוזה ממתין / העברה בלי אסמכתא)
+  const strictDealStages = strictOf(req.query)
+    ? [{ $match: { $expr: { $not: [DEAL_HELD_EXPR] } } }]
+    : [];
   const rows =
     metric === "collected"
       ? await Registration.aggregate([
@@ -533,6 +564,7 @@ export const trend = asyncHandler(async (req, res) => {
         ])
       : await Registration.aggregate([
           { $match: match },
+          ...strictDealStages,
           {
             $group: {
               _id: {
@@ -675,9 +707,15 @@ export const breakdown = asyncHandler(async (req, res) => {
   const scheduledUncollected = rows.filter((r) => !r.paid).reduce((a, r) => a + r.amount, 0);
   const heldRows = rows.filter((r) => r.paid && r.hold);
   const heldTotal = heldRows.reduce((a, r) => a + r.amount, 0);
-  // מכירות בתקופה (לפי תאריך עסקה) - להשוואה בלבד, לא בסיס הפרמיה
-  const soldInPeriod = deals.filter((d) => inRange(d.dealDate));
+  // מכירות בתקופה (לפי תאריך עסקה) - להשוואה בלבד, לא בסיס הפרמיה.
+  // במצב מחמיר עסקה מוחזקת (חוזה ממתין / העברה בלי אסמכתא) לא נספרת במכירות.
+  const periodDeals = deals.filter((d) => inRange(d.dealDate));
+  const heldPeriodDeals = periodDeals.filter((d) => dealHoldReason(d));
+  const soldInPeriod = strict
+    ? periodDeals.filter((d) => !dealHoldReason(d))
+    : periodDeals;
   const salesTotal = soldInPeriod.reduce((a, d) => a + (d.totalAmount || 0), 0);
+  const heldSalesTotal = heldPeriodDeals.reduce((a, d) => a + (d.totalAmount || 0), 0);
   // האחוז נבחר לפי הכסף שנגבה (כסף שטרם נגבה לא מקפיץ מדרגה)
   const { commissionRate } = computeCommission(collectedTotal, user.commission || {});
 
@@ -695,6 +733,8 @@ export const breakdown = asyncHandler(async (req, res) => {
       commissionRate,
       salesTotal: round2(salesTotal),
       soldCount: soldInPeriod.length,
+      heldSalesTotal: round2(heldSalesTotal), // מכירות התקופה של עסקאות מוחזקות
+      heldSalesCount: heldPeriodDeals.length,
       collectedTotal: round2(collectedTotal), // בסיס הפרמיה = תשלומים שנגבו בתקופה (במצב מחמיר בלי המוחזק)
       scheduledUncollected: round2(scheduledUncollected), // תשלומים שמועדם בטווח וטרם נגבו
       heldTotal: round2(heldTotal), // נגבה אבל מוחזק (חוזה לא חתום / חסרה אסמכתא)

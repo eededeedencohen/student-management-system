@@ -44,7 +44,19 @@ export function holdReasonOf(p, deal) {
   return null;
 }
 
-// --- אותו כלל כביטויי אגרגציה: אחרי { $unwind: "$payments" } ---------------
+/**
+ * רמת העסקה (owner 2026-08-27: "המכירות לא נחשבות אם הן מוחזקות או לא מאושרות"):
+ * עסקה מוחזקת = החוזה שלה ממתין, או שיש בה העברה ששולמה בלי אסמכתא. במצב מחמיר היא
+ * לא נספרת במכירות/עסקאות/יתרה של התקופה, כך שהיחס שכר/הכנסה מחושב על אותו בסיס.
+ */
+export function dealHoldReason(deal) {
+  if (contractPending(deal)) return "contract";
+  if ((deal?.payments || []).some((p) => !p.canceled && receiptMissing(p)))
+    return "receipt";
+  return null;
+}
+
+// --- אותו כלל כביטויי אגרגציה ------------------------------------------------
 const EPOCH = new Date(0);
 export const CONTRACT_PENDING_EXPR = {
   $and: [
@@ -52,27 +64,26 @@ export const CONTRACT_PENDING_EXPR = {
     { $ne: ["$contract.status", "signed"] },
   ],
 };
-export const RECEIPT_MISSING_EXPR = {
+/** ביטוי "העברה בלי אסמכתא" לתשלום שנתיב השדות שלו מתחיל ב-P ("$payments." אחרי $unwind, "$$p." בתוך $map). */
+const receiptMissingExpr = (P) => ({
   $and: [
-    { $eq: ["$payments.paid", true] },
+    { $eq: [`${P}paid`, true] },
     {
       $or: [
-        { $eq: ["$payments.methodCategory", "transfer"] },
-        { $eq: ["$payments.method", "transfer"] },
+        { $eq: [`${P}methodCategory`, "transfer"] },
+        { $eq: [`${P}method`, "transfer"] },
       ],
     },
     {
       $not: [
         {
           $and: [
-            { $eq: ["$payments.receiptImage", true] },
+            { $eq: [`${P}receiptImage`, true] },
             {
               $gt: [
                 {
                   $strLenCP: {
-                    $trim: {
-                      input: { $ifNull: ["$payments.receiptReference", ""] },
-                    },
+                    $trim: { input: { $ifNull: [`${P}receiptReference`, ""] } },
                   },
                 },
                 0,
@@ -86,11 +97,31 @@ export const RECEIPT_MISSING_EXPR = {
       $gte: [
         {
           $max: [
-            { $ifNull: ["$payments.dueDate", EPOCH] },
-            { $ifNull: ["$payments.confirmedAt", EPOCH] },
+            { $ifNull: [`${P}dueDate`, EPOCH] },
+            { $ifNull: [`${P}confirmedAt`, EPOCH] },
           ],
         },
         RECEIPTS_LAUNCH,
+      ],
+    },
+  ],
+});
+export const RECEIPT_MISSING_EXPR = receiptMissingExpr("$payments.");
+/** רמת העסקה (לפני $unwind): חוזה ממתין או תשלום כלשהו שהוא העברה בלי אסמכתא. */
+export const DEAL_HELD_EXPR = {
+  $or: [
+    CONTRACT_PENDING_EXPR,
+    {
+      $anyElementTrue: [
+        {
+          $map: {
+            input: { $ifNull: ["$payments", []] },
+            as: "p",
+            in: {
+              $and: [{ $ne: ["$$p.canceled", true] }, receiptMissingExpr("$$p.")],
+            },
+          },
+        },
       ],
     },
   ],
