@@ -369,6 +369,7 @@ export const remove = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.params.id);
   if (!student) throw ApiError.notFound("תלמיד/ה לא נמצא/ה");
 
+  // deleteMany מפעיל את ה-hook במודל: גם קובצי החוזה/אסמכתאות/עקיבות של העסקאות נמחקים
   const { deletedCount } = await Registration.deleteMany({
     student: student._id,
   });

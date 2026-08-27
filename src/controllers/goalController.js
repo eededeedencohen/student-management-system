@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import Goal from "../models/Goal.js";
 import Registration from "../models/Registration.js";
-import Lead from "../models/Lead.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { nowFromReq } from "../utils/dateRanges.js";
@@ -50,7 +49,7 @@ const pickGoalFields = (body = {}) => {
  * Compute the "actual" value for a goal's metric over the goal's period.
  * Revenue/sales/deals are counted from registrations with
  * recordType==='registration' only (advertising / collection_followup / other
- * are excluded). closeRate = won deals / leads received in the same window.
+ * are excluded).
  */
 const computeActual = async (goal) => {
   const repId = toObjectId(goal.rep);
@@ -81,42 +80,7 @@ const computeActual = async (goal) => {
     return row?.value || 0;
   }
 
-  if (goal.metric === "closeRate") {
-    // אחוז סגירה = עסקאות שנסגרו / כמות הלידים שהתקבלו בתקופה (0..1)
-    const deals = await Registration.countDocuments(baseMatch);
-
-    // Leads in window: individual leads by receivedDate, or aggregate counts by period.
-    const leadMatch = {
-      $or: [
-        {
-          isAggregate: { $ne: true },
-          receivedDate: { $gte: goal.startDate, $lte: goal.endDate },
-        },
-        {
-          isAggregate: true,
-          periodStart: { $lte: goal.endDate },
-          periodEnd: { $gte: goal.startDate },
-        },
-      ],
-    };
-    if (goal.scope === "rep" && repId) leadMatch.rep = repId;
-
-    const [row] = await Lead.aggregate([
-      { $match: leadMatch },
-      {
-        $group: {
-          _id: null,
-          // ספירת לידים: בודדים נחשבים 1, צבירה לפי count
-          value: {
-            $sum: { $cond: ["$isAggregate", { $ifNull: ["$count", 0] }, 1] },
-          },
-        },
-      },
-    ]);
-    const leads = row?.value || 0;
-    return leads > 0 ? deals / leads : 0;
-  }
-
+  // מדד "אחוז סגירה" (closeRate) הוסר יחד עם אוסף הלידים (2026-08-26)
   return 0;
 };
 

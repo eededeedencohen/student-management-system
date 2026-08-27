@@ -3,7 +3,6 @@ import Student from "../models/Student.js";
 import User from "../models/User.js";
 import Course from "../models/Course.js";
 import CourseCohort from "../models/CourseCohort.js";
-import Lead from "../models/Lead.js";
 import PaymentReceipt from "../models/PaymentReceipt.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
@@ -374,7 +373,6 @@ export const create = asyncHandler(async (req, res) => {
       schemaVersion: 2,
       student: studentId,
       studentName: cleanStr(body.studentName),
-      lead: body.lead || undefined,
       rep: repId,
       repName,
       course: body.course || undefined,
@@ -403,15 +401,6 @@ export const create = asyncHandler(async (req, res) => {
       await reg.save();
     }
 
-    // Close the originating lead: mark it "won" and link it to this deal.
-    if (body.lead) {
-      const lead = await Lead.findById(body.lead);
-      if (lead && (!req.scopeRepId || String(lead.rep) === req.scopeRepId)) {
-        lead.status = "won";
-        lead.convertedRegistration = reg._id;
-        await lead.save();
-      }
-    }
     return res.status(201).json({ success: true, data: reg });
   }
 
@@ -1542,8 +1531,9 @@ export const remove = asyncHandler(async (req, res) => {
     throw ApiError.forbidden("אין הרשאה למחוק רישום זה");
   }
 
+  // מחיקה מדורגת: ה-hook במודל מוחק גם את ה-PDF של החוזה, האסמכתאות והעקיבות
   await reg.deleteOne();
-  res.json({ success: true, data: { _id: reg._id } });
+  res.json({ success: true, data: { _id: reg._id, cascade: reg.$locals.cascade } });
 });
 
 /**

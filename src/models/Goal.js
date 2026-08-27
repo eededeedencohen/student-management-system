@@ -14,9 +14,9 @@ const goalSchema = new Schema(
     scope: { type: String, enum: ['rep', 'team'], default: 'rep' },
     metric: {
       type: String,
-      enum: ['salesAmount', 'dealsCount', 'collectedAmount', 'closeRate'],
+      enum: ['salesAmount', 'dealsCount', 'collectedAmount'],
       default: 'salesAmount',
-    }, // מדד: ש"ח מכירות / כמות עסקאות / סכום שנגבה / אחוז סגירה
+    }, // מדד: ש"ח מכירות / כמות עסקאות / סכום שנגבה
     targetValue: { type: Number, required: true }, // ערך היעד
     periodType: {
       type: String,

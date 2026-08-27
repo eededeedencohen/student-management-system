@@ -15,13 +15,13 @@ import expenseRoutes from './routes/expenseRoutes.js';
 import cashflowRoutes from './routes/cashflowRoutes.js';
 import commissionRoutes from './routes/commissionRoutes.js';
 import goalRoutes from './routes/goalRoutes.js';
-import leadRoutes from './routes/leadRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
 import externalRoutes from './routes/externalRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import quoteRoutes from './routes/quoteRoutes.js';
 import detailsFormRoutes from './routes/detailsFormRoutes.js';
+import dbExplorerRoutes from './routes/dbExplorerRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { injectOgMeta } from './utils/ogMeta.js';
@@ -62,13 +62,13 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/cashflow', cashflowRoutes);
 app.use('/api/commissions', commissionRoutes);
 app.use('/api/goals', goalRoutes);
-app.use('/api/leads', leadRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/emails', emailRoutes); // שליחת מיילים דרך Gmail (מנהל-העל בלבד)
 app.use('/api/catalog', catalogRoutes); // קורסים/מחזורים/מרצים (יקיר - מנהל)
 app.use('/api/quotes', quoteRoutes); // הצעות מחיר שמורות + טמפלטים (כל משתמש)
 app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
 app.use('/api/details-forms', detailsFormRoutes); // ניהול טפסי השלמת פרטים (מנהל)
+app.use('/api/db-explorer', dbExplorerRoutes); // עמוד "מסד הנתונים" - מנהל-העל בלבד, קריאה בלבד
 
 // --- serve the built client (single-server mode) ---------------------------
 // The client's production build is copied to server/public. We serve its assets

@@ -149,7 +149,6 @@ const registrationSchema = new Schema(
     student: { type: Schema.Types.ObjectId, ref: "Student", index: true },
     studentName: { type: String, trim: true, index: true }, // שם הנרשם/ת (raw, always kept)
     idNumber: { type: String, trim: true },
-    lead: { type: Schema.Types.ObjectId, ref: "Lead", index: true }, // הליד שממנו נסגרה העסקה
     // עסקה משולבת (שני קורסים בעסקה אחת): כל הקורסים; `course` נשאר הראשי.
     coursesAll: [{ type: Schema.Types.ObjectId, ref: "Course" }],
     rep: { type: Schema.Types.ObjectId, ref: "User", index: true }, // נציגת המכירות
@@ -358,6 +357,41 @@ registrationSchema.methods.recompute = function recompute() {
 
 registrationSchema.index({ dealDate: 1, rep: 1 });
 registrationSchema.index({ courseField: 1, dealDate: 1 });
+
+/**
+ * מחיקה מדורגת (owner rule 2026-08-26): קובץ PDF של חוזה, אסמכתאות העברה ורשומות
+ * עקיבות לא מתקיימים בלי העסקה שלהם. כל מחיקה של עסקה - דרך המסמך (reg.deleteOne())
+ * או דרך שאילתה (deleteMany / findOneAndDelete) - מוחקת גם אותם.
+ * מחזיר את הספירות כדי שהקונטרולרים יוכלו לדווח.
+ */
+registrationSchema.statics.cascadeDelete = async function cascadeDelete(ids) {
+  const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+  if (!list.length) return { contractPdfs: 0, paymentReceipts: 0, sourceRefs: 0 };
+  const [pdf, rec, refs] = await Promise.all([
+    mongoose.model("ContractPdf").deleteMany({ registration: { $in: list } }),
+    mongoose.model("PaymentReceipt").deleteMany({ registration: { $in: list } }),
+    mongoose.model("SourceRef").deleteMany({ deal: { $in: list } }),
+  ]);
+  return {
+    contractPdfs: pdf.deletedCount || 0,
+    paymentReceipts: rec.deletedCount || 0,
+    sourceRefs: refs.deletedCount || 0,
+  };
+};
+
+// מחיקה דרך מסמך: reg.deleteOne()
+registrationSchema.pre("deleteOne", { document: true, query: false }, async function cascadeDoc() {
+  this.$locals.cascade = await this.constructor.cascadeDelete([this._id]);
+});
+
+// מחיקה דרך שאילתה: Registration.deleteOne(filter) / deleteMany(filter) / findOneAndDelete(filter)
+async function cascadeQuery() {
+  const ids = await this.model.find(this.getFilter()).distinct("_id");
+  this.cascade = await this.model.cascadeDelete(ids);
+}
+registrationSchema.pre("deleteOne", { document: false, query: true }, cascadeQuery);
+registrationSchema.pre("deleteMany", cascadeQuery);
+registrationSchema.pre("findOneAndDelete", cascadeQuery);
 
 export default mongoose.models.Registration ||
   mongoose.model("Registration", registrationSchema);

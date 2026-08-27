@@ -44,7 +44,6 @@ const { default: Registration } = await import("../models/Registration.js");
 const { default: Student } = await import("../models/Student.js");
 const { default: Course } = await import("../models/Course.js");
 const { default: User } = await import("../models/User.js");
-const { default: Lead } = await import("../models/Lead.js");
 const { default: Expense } = await import("../models/Expense.js");
 const { default: SourceRef } = await import("../models/SourceRef.js");
 const { splitName } = await import("../utils/normalize.js");
@@ -370,7 +369,6 @@ try {
   const delExp = await Expense.deleteMany({
     sourceFile: { $exists: true, $ne: null },
   });
-  await Lead.updateMany({}, { $unset: { convertedRegistration: 1 } });
   console.log(
     `🧹 נמחקו: ${delRegs.deletedCount} עסקאות, ${delStu.deletedCount} סטודנטים, ` +
       `${delRefs.deletedCount} רפרנסים, ${delExp.deletedCount} הוצאות מיובאות`,
