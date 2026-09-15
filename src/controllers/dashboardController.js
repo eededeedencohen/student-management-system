@@ -673,7 +673,7 @@ export const reps = asyncHandler(async (req, res) => {
  *
  *   verify    - legacy: לא-הו"ק שאושרו אוטומטית לפני 27/08 (הו"ק לא נכללת - אין מה לוודא)
  *   confirm   - לא-הו"ק שמועדם עבר ועדיין פתוחים: "לאשר גבייה" (בלי חלון זמן - חוב לא מתיישן)
- *   due       - אמורים להיכנס עכשיו/בקרוב: לעקוב
+ *   due       - לא-הו"ק שאמורים להיכנס עכשיו/בקרוב: לעקוב (הו"ק יורדת אוטומטית - לא מופיעה)
  *   stopped   - הו"ק שמועדה עבר ולא אושרה (הערה מכילה "הופסק"): דורשת טיפול (בלי חלון זמן)
  *   contracts - חוזים שנוצרו מהמערכת וממתינים לחתימה
  *   receipts  - העברות בנקאיות בלי אסמכתא
@@ -774,7 +774,8 @@ export const paymentTasks = asyncHandler(async (req, res) => {
       // אוטומטית (מ-2026-08-27) - ממתין שהנציג/ה יסמן/תסמן שהכסף נכנס
       if (isErnPayment(r)) stopped.push({ ...base(r), overdueDays: daysPast });
       else confirm.push({ ...base(r), overdueDays: daysPast });
-    } else {
+    } else if (!isErnPayment(r)) {
+      // "בקרוב" בלי הו"ק (owner 2026-08-27): היא יורדת אוטומטית - אין מה לעקוב מראש
       due.push(base(r));
     }
   }
