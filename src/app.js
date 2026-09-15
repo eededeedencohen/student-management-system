@@ -22,6 +22,7 @@ import catalogRoutes from './routes/catalogRoutes.js';
 import quoteRoutes from './routes/quoteRoutes.js';
 import detailsFormRoutes from './routes/detailsFormRoutes.js';
 import dbExplorerRoutes from './routes/dbExplorerRoutes.js';
+import certificateRoutes from './routes/certificateRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { injectOgMeta } from './utils/ogMeta.js';
@@ -42,6 +43,8 @@ app.use((req, res, next) => {
     (req.method === 'PUT' && /^\/api\/registrations\/[^/]+\/payments\/[^/]+\/receipt$/.test(req.path)) ||
     (req.method === 'POST' && /^\/api\/registrations\/[^/]+\/contract\/upload-signed$/.test(req.path)) ||
     (req.method === 'POST' && /^\/api\/quotes\/[^/]+\/pdf$/.test(req.path)) ||
+    (req.method === 'POST' && req.path === '/api/certificates/signatures') ||
+    (req.method === 'PUT' && /^\/api\/certificates\/batch\//.test(req.path)) ||
     (req.method === 'POST' && (req.path === '/api/public/deals' || req.path === '/api/registrations'));
   return (large ? jsonLarge : jsonSmall)(req, res, next);
 });
@@ -69,6 +72,7 @@ app.use('/api/quotes', quoteRoutes); // הצעות מחיר שמורות + טמ�
 app.use('/api/public', externalRoutes); // טופס חיצוני + חוזה דיגיטלי (ללא התחברות)
 app.use('/api/details-forms', detailsFormRoutes); // ניהול טפסי השלמת פרטים (מנהל)
 app.use('/api/db-explorer', dbExplorerRoutes); // עמוד "מסד הנתונים" - מנהל-העל בלבד, קריאה בלבד
+app.use('/api/certificates', certificateRoutes); // מחוללי התעודות + חתימות המרצים (מנהל)
 
 // --- serve the built client (single-server mode) ---------------------------
 // The client's production build is copied to server/public. We serve its assets

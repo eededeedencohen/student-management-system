@@ -12,6 +12,11 @@ npm-debug.log*
 # build output
 dist/
 
+# certificate templates + original signature images (extracted from the standalone
+# generators, seeded into Mongo by src/scripts/seedCertAssets.mjs).
+# THIS REPO IS PUBLIC - these must never be committed.
+.cert-assets/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

@@ -367,6 +367,14 @@ export const get = asyncHandler(async (req, res) => {
     data: {
       course,
       cohortSessions,
+      // המחזור המקושר - מחוללי התעודות עובדים לפי מזהה מחזור, לא לפי הקורס הישן
+      cohort: cohort
+        ? {
+            id: String(cohort._id),
+            label: cohort.label || "",
+            courseName: cohort.catalogCourse?.name || "",
+          }
+        : null,
       roster: visibleRoster,
       // הכסף מכבד את מוד "מ-2026"; רשימת הנרשמים והספירה מלאות
       money: courseMoney(moneyScoped(req, repMoneyDeals(req, roster))),

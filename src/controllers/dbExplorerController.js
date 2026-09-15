@@ -13,6 +13,9 @@ import {
 } from "../utils/dbExplorerMeta.js";
 // כל המודלים נרשמים כאן במפורש, כדי שהמבוא יראה את כולם גם אם קונטרולר אחר עוד לא נטען
 import "../models/CatalogCourse.js";
+import "../models/CertificateAsset.js";
+import "../models/CertificateBatch.js";
+import "../models/CertificateSignature.js";
 import "../models/ContractPdf.js";
 import "../models/Course.js";
 import "../models/CourseCohort.js";
