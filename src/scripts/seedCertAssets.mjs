@@ -8,6 +8,8 @@
  *   node src/scripts/extractCertAssets.mjs     # קודם - מחלץ מקובצי ה-HTML
  *   node src/scripts/seedCertAssets.mjs        # דוח בלבד (dry run)
  *   node src/scripts/seedCertAssets.mjs --apply
+ *   node src/scripts/seedCertAssets.mjs --apply --prune   # גם מוחק נכסים שאינם במניפסט
+ *                                                          # (למשל רקעים ישנים שהוחלפו)
  */
 import "dotenv/config";
 import fs from "node:fs";
@@ -19,6 +21,7 @@ import CertificateAsset from "../models/CertificateAsset.js";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGING = path.resolve(HERE, "../../.cert-assets");
 const apply = process.argv.includes("--apply");
+const prune = process.argv.includes("--prune");
 
 const manifestPath = path.join(STAGING, "manifest.json");
 if (!fs.existsSync(manifestPath)) {
@@ -68,7 +71,8 @@ console.log(`  כבר במסד: ${toUpdate}`);
 console.log(`  חדשים: ${toInsert} (${(insertBytes / 1024 / 1024).toFixed(2)} MB)`);
 
 const stale = [...existing.keys()].filter((sha) => !wanted.has(sha));
-if (stale.length) console.log(`  במסד ולא במניפסט: ${stale.length} (לא נוגעים בהם)`);
+if (stale.length)
+  console.log(`  במסד ולא במניפסט: ${stale.length} (${prune ? "יימחקו עם --prune" : "לא נוגעים בהם"})`);
 
 if (!apply) {
   console.log("\ndry run - להרצה בפועל: --apply");
@@ -101,6 +105,13 @@ for (const [sha, info] of wanted) {
     { upsert: true },
   );
   written++;
+}
+
+// נכס שהוחלף (למשל רקע עם חותמת ישנה) עדיין נושא usedBy של התפקיד הישן, ובלי
+// מחיקה המניפסט של ה-API היה מחזיר שני sha לאותו תפקיד. המחיקה לפי sha בלבד.
+if (prune && stale.length) {
+  const { deletedCount } = await CertificateAsset.deleteMany({ sha: { $in: stale } });
+  console.log(`נמחקו ${deletedCount} נכסים שאינם במניפסט: ${stale.join(", ")}`);
 }
 
 const after = await CertificateAsset.aggregate([
