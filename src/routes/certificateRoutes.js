@@ -14,6 +14,7 @@ router.get("/manifest", ctrl.manifest);
 router.get("/assets/:sha", ctrl.asset);
 
 router.get("/roster/:cohortId", ctrl.roster);
+router.put("/tracks/:cohortId", ctrl.saveTracks);
 
 router.get("/batch/:cohortId/:generator", ctrl.getBatch);
 router.put("/batch/:cohortId/:generator", ctrl.saveBatch);

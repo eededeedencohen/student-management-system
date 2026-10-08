@@ -9,6 +9,7 @@ import Student from "../models/Student.js";
 import DetailsSubmission from "../models/DetailsSubmission.js";
 import Teacher from "../models/Teacher.js";
 import { teacherNamesOf } from "../utils/cohortTeachers.js";
+import { CERT_TRACKS, MAX_TRACKS, cleanTracks } from "../utils/certTracks.js";
 
 /**
  * מחוללי התעודות.
@@ -155,7 +156,7 @@ export const roster = asyncHandler(async (req, res) => {
     recordType: "registration",
     $or: [{ cohort: cohort._id }, { cohortsAll: cohort._id }],
   })
-    .select("student studentName idNumber dealDate rep repName")
+    .select("student studentName idNumber dealDate rep repName tracks")
     .sort({ studentName: 1 })
     .lean();
 
@@ -171,7 +172,7 @@ export const roster = asyncHandler(async (req, res) => {
 
   const people = deals.map((d) => {
     const st = d.student ? studentById.get(String(d.student)) : null;
-    const heName = st?.hebrewName || st?.fullName || d.studentName || "";
+    const heName = st?.fullName || st?.hebrewName || d.studentName || "";
     const idKey = realId(st?.realIdNumber, d.idNumber);
     const phoneKey = digits(st?.mobile);
     const nKey = nameKey(heName);
@@ -183,12 +184,13 @@ export const roster = asyncHandler(async (req, res) => {
       subs.find((s) => nKey && nameKey(`${s.firstNameHe} ${s.lastNameHe}`) === nKey) ||
       null;
 
-    const nameHe =
-      (sub && `${sub.firstNameHe || ""} ${sub.lastNameHe || ""}`.trim()) || heName;
-    const nameEn =
-      (sub && `${sub.firstNameEn || ""} ${sub.lastNameEn || ""}`.trim()) ||
-      st?.englishName ||
-      "";
+    // כלל הבעלים (2026-10-08): התעודה נאמנה לכרטיס התלמיד/ה כפי שהוא מוצג בעמוד
+    // הסטודנט. הטופס שהסטודנט מילא הוא רק גיבוי למה שחסר בכרטיס - מי שרוצה את
+    // נתוני הטופס על התעודה מצליב אותם לכרטיס בעמוד ניהול טפסים.
+    const subNameHe = sub ? `${sub.firstNameHe || ""} ${sub.lastNameHe || ""}`.trim() : "";
+    const subNameEn = sub ? `${sub.firstNameEn || ""} ${sub.lastNameEn || ""}`.trim() : "";
+    const nameHe = st?.fullName || st?.hebrewName || d.studentName || subNameHe;
+    const nameEn = st?.englishName || subNameEn;
     const gender = st?.gender || sub?.gender || "";
     const title = st?.title || sub?.title || "";
 
@@ -202,6 +204,11 @@ export const roster = asyncHandler(async (req, res) => {
       ...titlesOf(gender, title),
       repName: d.repName || "",
       dealDate: d.dealDate || null,
+      // מגמות מקצועיות (עמוד "מגמות מקצועיות") - המחולל גוזר מהן את תעודות המגמה.
+      // tracksDecided=false: עדיין לא סומן כלום בעמוד המגמות (גם "ללא מגמה" הוא
+      // החלטה, ונשמר כמערך ריק) - המחולל מתייחס לזה כנתון חסר.
+      tracks: cleanTracks(d.tracks),
+      tracksDecided: Array.isArray(d.tracks),
       // מה חסר כדי להפיק תעודה תקינה - מוצג כאזהרה בעמוד
       missing: [
         !nameHe && "שם",
@@ -224,6 +231,43 @@ export const roster = asyncHandler(async (req, res) => {
       people,
     },
   });
+});
+
+/**
+ * PUT /api/certificates/tracks/:cohortId
+ * body: { assignments: [{ registration, tracks: [], decided?: boolean }] }
+ * עמוד "מגמות מקצועיות": קובע לכל נרשם/ת במחזור 0-4 מגמות מהרשימה הקבועה.
+ * נשמר על העסקה (Registration.tracks) - זו ההרשמה לקורס - ונקרא ע"י רשימת
+ * מקבלי התעודה, כך שהמחולל יודע לבד אילו תעודות מגמה להפיק.
+ * שלושה מצבים: undefined = טרם הוחלט; [] = הוחלט "ללא מגמה" (decided=true);
+ * [...] = המגמות. רשימה ריקה בלי decided מחזירה ל"טרם הוחלט".
+ */
+export const saveTracks = asyncHandler(async (req, res) => {
+  const cohort = await CourseCohort.findById(req.params.cohortId).select("_id").lean();
+  if (!cohort) throw ApiError.notFound("המחזור לא נמצא");
+  const list = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+  const ids = list.map((a) => String(a?.registration || "")).filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+  const regs = await Registration.find({
+    _id: { $in: ids },
+    $or: [{ cohort: cohort._id }, { cohortsAll: cohort._id }],
+  });
+  const byId = new Map(regs.map((r) => [String(r._id), r]));
+  let changed = 0;
+  for (const a of list) {
+    const reg = byId.get(String(a?.registration || ""));
+    if (!reg) throw ApiError.badRequest("אחת העסקאות אינה שייכת למחזור הזה");
+    if (Array.isArray(a.tracks) && a.tracks.length > MAX_TRACKS)
+      throw ApiError.badRequest(`עד ${MAX_TRACKS} מגמות לנרשם/ת`);
+    const next = cleanTracks(a.tracks);
+    const decided = next.length > 0 || Boolean(a.decided);
+    const nextKey = decided ? next.join("|") : null;
+    const curKey = Array.isArray(reg.tracks) ? cleanTracks(reg.tracks).join("|") : null;
+    if (nextKey === curKey) continue;
+    reg.tracks = decided ? next : undefined;
+    await reg.save();
+    changed++;
+  }
+  res.json({ success: true, data: { changed, tracks: CERT_TRACKS } });
 });
 
 /* ------------------------------------------------------------------ */

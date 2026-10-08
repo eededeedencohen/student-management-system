@@ -47,7 +47,7 @@ export const FIELD_HE = {
   _id: "מזהה", __v: "גרסת מסמך", createdAt: "נוצר ב", updatedAt: "עודכן ב",
   student: "תלמיד/ה", studentName: "שם התלמיד/ה", idNumber: "ת.ז.", rep: "נציגה", repName: "שם הנציגה",
   cohort: "מחזור", cohortsAll: "כל המחזורים", course: "קורס (ישן)", coursesAll: "כל הקורסים (ישן)", courseRaw: "שם קורס גולמי",
-  courseField: "משפחת קורס", cohortLabel: "תווית מחזור", coursesInfo: "פרטי קורסים לחוזה", deliveryMode: "אופן השתתפות",
+  courseField: "משפחת קורס", cohortLabel: "תווית מחזור", coursesInfo: "פרטי קורסים לחוזה", deliveryMode: "אופן השתתפות", tracks: "מגמות מקצועיות",
   externalId: "מזהה חיצוני", dealDate: "תאריך עסקה", dealDateRaw: "תאריך עסקה גולמי", dateAssumed: "תאריך משוער",
   schemaVersion: "גרסת סכימה", recordType: "סוג רשומה", needsReview: "דורש בדיקה",
   dealPrice: "מחיר העסקה", discountPercent: "אחוז הנחה", writeOff: "מחילה", totalAmount: "סה\"כ עסקה", totalPaid: "נגבה",

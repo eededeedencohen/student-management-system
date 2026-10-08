@@ -186,6 +186,9 @@ const registrationSchema = new Schema(
     // אופן ההשתתפות של הנרשם/ת: זום או פרונטלי. נקבע בטופס החיצוני - במחזור
     // "לפי בחירה" (hybrid) זו הבחירה של הנרשם/ת; במחזור קבוע זה האופן של המחזור.
     deliveryMode: { type: String, enum: ["zoom", "frontal"] },
+    // מגמות מקצועיות (NLP פרקטישינר): 0-4 מתוך הרשימה הקבועה ב-utils/certTracks.js.
+    // נקבעות בעמוד "מגמות מקצועיות" ומזינות את תעודות המגמה במחולל.
+    tracks: { type: [String], default: undefined },
 
     // --- dates ---
     dealDate: { type: Date, index: true }, // תאריך עסקה
