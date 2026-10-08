@@ -579,13 +579,57 @@ export const updateCourses = asyncHandler(async (req, res) => {
   if (req.scopeRepId && String(reg.rep) !== req.scopeRepId) {
     throw ApiError.forbidden("אין הרשאה לערוך רישום זה");
   }
-  const ids = [
-    ...new Set(
-      (Array.isArray(req.body?.cohorts) ? req.body.cohorts : [])
-        .map((x) => cleanStr(x))
-        .filter((x) => /^[0-9a-fA-F]{24}$/.test(x)),
-    ),
-  ];
+  const ids = parseCohortIds(req.body?.cohorts);
+  if (ids.length === 0) throw ApiError.badRequest("יש לבחור לפחות מחזור קורס אחד");
+  await applyCourseSelection(reg, ids, {
+    deliveryModes: req.body?.deliveryModes,
+    user: req.user,
+  });
+  reg.recompute();
+  await reg.save();
+  // עם assignedCohorts - עמוד התלמיד/ה ממזג את התשובה לשורה ומציג את השיוך החדש מיד
+  const [out] = await attachAssignedCohorts([reg]);
+  res.json({ success: true, data: out });
+});
+
+/** מזהי מחזורים מהבקשה: ייחודיים, רק ObjectId תקין. */
+export const parseCohortIds = (raw) => [
+  ...new Set(
+    (Array.isArray(raw) ? raw : [])
+      .map((x) => cleanStr(x))
+      .filter((x) => /^[0-9a-fA-F]{24}$/.test(x)),
+  ),
+];
+
+/**
+ * ניקוי כל שיוך הקורסים של עסקה ("ללא שיוך"): cohort/cohortsAll/course/coursesAll
+ * מתרוקנים, הטקסט הגולמי (courseRaw/cohortLabel) נשאר כהיסטוריה. משמש בהצלבה
+ * מעמוד ניהול טפסים כשהמנהל מוריד עסקה ממחזור בלי לשים אחר במקומה.
+ * המחיר והתשלומים אינם נוגעים. לא שומר - האחריות על הקורא.
+ */
+export const clearCourseSelection = (reg, user) => {
+  const prevText = reg.courseRaw || "";
+  reg.course = undefined;
+  reg.coursesAll = undefined;
+  reg.cohort = undefined;
+  reg.cohortsAll = undefined;
+  reg.coursesInfo = undefined;
+  if (reg.checklist) reg.checklist.courseGroups = undefined;
+  reg.noteEntries.push({
+    text: `השיוך למחזור הוסר: "${prevText || "-"}" ← ללא שיוך`,
+    date: new Date(),
+    ...(user?._id && user._id !== "admin-token" ? { by: user._id } : {}),
+    byName: user?.name || "",
+  });
+};
+
+/**
+ * מציב על עסקה קיימת את רשימת המחזורים שנבחרו (1-4; הראשון = הראשי) ומעדכן
+ * את כל שדות הקורס בעקביות - הליבה של PUT /:id/courses, מופרדת כדי שגם
+ * ההצלבה בעמוד ניהול טפסים תשתמש באותו חוק. זורק ApiError על קלט לא תקין.
+ * לא שומר ולא מחשב מחדש - האחריות על הקורא.
+ */
+export const applyCourseSelection = async (reg, ids, { deliveryModes, user } = {}) => {
   if (ids.length === 0) throw ApiError.badRequest("יש לבחור לפחות מחזור קורס אחד");
   if (ids.length > 4) throw ApiError.badRequest("עד 4 קורסים בעסקה אחת");
 
@@ -608,9 +652,7 @@ export const updateCourses = asyncHandler(async (req, res) => {
   // אופן השתתפות לכל קורס: בחירה מפורשת בבקשה > האופן הקבוע של המחזור >
   // מה שכבר נשמר בעסקה לקורס בשם הזה > האופן הכללי של העסקה
   const rawModes =
-    req.body?.deliveryModes && typeof req.body.deliveryModes === "object"
-      ? req.body.deliveryModes
-      : {};
+    deliveryModes && typeof deliveryModes === "object" ? deliveryModes : {};
   const prevInfo = reg.coursesInfo || [];
   const prevModeByName = new Map(
     prevInfo.map((ci) => [ci.name, ci.deliveryMode || ""]),
@@ -672,15 +714,11 @@ export const updateCourses = asyncHandler(async (req, res) => {
   reg.noteEntries.push({
     text: `הקורסים עודכנו: "${prevText || "-"}" ← "${reg.courseRaw}"${isPackage ? ` (עסקת חבילה, ${perCourse.length} קורסים)` : ""}`,
     date: new Date(),
-    ...(req.user?._id && req.user._id !== "admin-token" ? { by: req.user._id } : {}),
-    byName: req.user?.name || "",
+    ...(user?._id && user._id !== "admin-token" ? { by: user._id } : {}),
+    byName: user?.name || "",
   });
-  reg.recompute();
-  await reg.save();
-  // עם assignedCohorts - עמוד התלמיד/ה ממזג את התשובה לשורה ומציג את השיוך החדש מיד
-  const [out] = await attachAssignedCohorts([reg]);
-  res.json({ success: true, data: out });
-});
+  return reg;
+};
 
 /**
  * PUT /api/registrations/:id

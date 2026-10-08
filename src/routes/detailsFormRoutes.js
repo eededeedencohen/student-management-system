@@ -12,6 +12,11 @@ router.use(protect, requireFormsAccess);
 
 router.get("/", ctrl.adminList);
 router.post("/", ctrl.createForm);
+// הצלבה של הגשה שלא זוהתה לסטודנט במאגר
+router.get("/students", ctrl.searchStudents);
+router.get("/students/:id", ctrl.studentForLink);
+router.post("/submissions/:id/link", ctrl.linkSubmission);
+router.post("/submissions/:id/unlink", ctrl.unlinkSubmission);
 router.delete("/submissions/:id", ctrl.deleteSubmission);
 router.delete("/:id", ctrl.deleteForm);
 

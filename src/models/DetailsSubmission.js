@@ -5,7 +5,8 @@ const { Schema } = mongoose;
 /**
  * DetailsSubmission - הגשה אחת של טופס השלמת פרטים (DetailsForm).
  * אותם שדות כמו שלב "פרטים אישיים" בטופס העסקה; ההתאמה לסטודנט ברשימת
- * הנרשמים נעשית דינמית בעמוד הניהול (לפי ת.ז. / טלפון / שם) ולא נשמרת כאן.
+ * הנרשמים נעשית דינמית בעמוד הניהול (לפי ת.ז. / טלפון / שם) - אלא אם המנהל
+ * הצליב את ההגשה ידנית לסטודנט (`student`), ואז הקישור המפורש גובר.
  */
 const detailsSubmissionSchema = new Schema(
   {
@@ -16,6 +17,11 @@ const detailsSubmissionSchema = new Schema(
       index: true,
     },
     cohort: { type: Schema.Types.ObjectId, ref: "CourseCohort", index: true },
+    // הצלבה ידנית: ההגשה שייכת לסטודנט הזה גם אם השם בטופס שונה מהרשום במערכת
+    // (נתוני האקסל לא מדויקים). נקבע ב"הצלבה" בעמוד ניהול טפסים, ניתן לניתוק.
+    student: { type: Schema.Types.ObjectId, ref: "Student", index: true },
+    linkedAt: { type: Date },
+    linkedByName: { type: String, trim: true },
 
     firstNameHe: { type: String, trim: true },
     lastNameHe: { type: String, trim: true },
