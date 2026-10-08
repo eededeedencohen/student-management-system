@@ -529,7 +529,7 @@ export const linkSubmission = asyncHandler(async (req, res) => {
     if (key === "gender") {
       student.gender = v === "male" || v === "female" ? v : null;
     } else if (key === "title") {
-      student.title = ["Mr.", "Ms.", "Mrs."].includes(v) ? v : null;
+      student.title = ["Mr.", "Ms.", "Mrs.", "Adv."].includes(v) ? v : null;
     } else if (key === "email") {
       student.email = v.toLowerCase();
     } else {
@@ -542,10 +542,12 @@ export const linkSubmission = asyncHandler(async (req, res) => {
     student.lastName = lastName;
     student.hebrewName = fullName;
   }
-  // עקביות מין<->פנייה כמו בעריכת תלמיד: גבר תמיד .Mr, אישה לא .Mr
-  if (student.gender === "male") student.title = "Mr.";
-  else if (student.gender === "female" && student.title === "Mr.")
-    student.title = null;
+  // עקביות מין<->פנייה כמו בעריכת תלמיד: גבר תמיד .Mr, אישה לא .Mr; עו"ד ניטרלי
+  if (student.title !== "Adv.") {
+    if (student.gender === "male") student.title = "Mr.";
+    else if (student.gender === "female" && student.title === "Mr.")
+      student.title = null;
+  }
   await student.save();
 
   // --- המחזורים של העסקאות ---

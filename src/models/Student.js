@@ -19,7 +19,9 @@ const studentSchema = new Schema(
     idNumber: { type: String, trim: true, index: true }, // ת.ז. (סינתטית 1001+ לפי סדר כרונולוגי, כמו ב-JSON)
     realIdNumber: { type: String, trim: true }, // ת.ז. אמיתית - רק למי שידועה במקור
     gender: { type: String, enum: ["male", "female"] }, // מין (מהטופס החיצוני)
-    title: { type: String, enum: ["Mr.", "Ms.", "Mrs."] }, // פנייה - גבר תמיד .Mr
+    // פנייה - גבר תמיד .Mr, אישה .Ms/.Mrs; "Adv." (עו"ד) ניטרלי למין, נבחר רק בעריכת
+    // תלמיד/ה קיים/ת (לא בטפסים הציבוריים) ומודפס על התעודה כ-עו"ד / ADV.
+    title: { type: String, enum: ["Mr.", "Ms.", "Mrs.", "Adv."] },
     mobile: { type: String, trim: true }, // נייד
     email: { type: String, trim: true, lowercase: true }, // מייל
     city: { type: String, trim: true }, // עיר

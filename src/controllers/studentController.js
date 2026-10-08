@@ -345,15 +345,18 @@ export const update = asyncHandler(async (req, res) => {
 
   // עקביות מין↔פנייה (אותו כלל כמו בעריכת נתונים ובטופס החיצוני): השדה שהשתנה
   // מוביל - גבר ⇒ Mr.; אישה עם Mr. ⇒ הפנייה מתרוקנת; Mr. ⇒ גבר; Ms./Mrs. ⇒ אישה.
+  // "Adv." (עו"ד) ניטרלי: לא נוגע במין ולא נדרס על ידו.
   const genderChanged = (student.gender || null) !== (prevGender || null);
   const titleChanged = (student.title || null) !== (prevTitle || null);
-  if (genderChanged || !titleChanged) {
-    if (student.gender === "male") student.title = "Mr.";
-    else if (student.gender === "female" && student.title === "Mr.")
-      student.title = null;
-  } else {
-    if (student.title === "Mr.") student.gender = "male";
-    else if (["Ms.", "Mrs."].includes(student.title)) student.gender = "female";
+  if (student.title !== "Adv.") {
+    if (genderChanged || !titleChanged) {
+      if (student.gender === "male") student.title = "Mr.";
+      else if (student.gender === "female" && student.title === "Mr.")
+        student.title = null;
+    } else {
+      if (student.title === "Mr.") student.gender = "male";
+      else if (["Ms.", "Mrs."].includes(student.title)) student.gender = "female";
+    }
   }
 
   await student.save();

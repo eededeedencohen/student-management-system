@@ -127,9 +127,13 @@ const realId = (...candidates) => {
   return "";
 };
 
-/** מר/גב׳ מתוך gender/title, עם ברירת מחדל נקבה כמו במחוללים. */
+/**
+ * מר/גב׳ מתוך gender/title, עם ברירת מחדל נקבה כמו במחוללים. עו"ד ("Adv.")
+ * מודפס כ-עו"ד / ADV. והמין (לנוסח סיים/סיימה) נשאר לפי שדה המין בלבד.
+ */
 const titlesOf = (gender, title) => {
-  const male = gender === "male" || title === "Mr.";
+  const male = gender === "male" || (title === "Mr." && gender !== "female");
+  if (title === "Adv.") return { titleHe: 'עו"ד', titleEn: "ADV.", male };
   return {
     titleHe: male ? "מר" : "גב׳",
     titleEn: male ? "MR." : title === "Mrs." ? "MRS." : "MS.",
