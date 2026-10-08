@@ -79,7 +79,7 @@ export const FIELD_HE = {
   endDateRaw: "סיום גולמי", sessionsCount: "מספר מפגשים", lecturer: "מרצה (טקסט)", weekday: "יום בשבוע",
   username: "שם משתמש", passwordHash: "סיסמה (hash)", passwordReset: "איפוס סיסמה", tokenHash: "hash של הטוקן", expiresAt: "תוקף",
   createdByName: "שם היוצר/ת", role: "תפקיד", superAdmin: "מנהל-על", formsAccess: "גישה לטפסים",
-  quickDealAccess: "גישה לעסקה מהירה", testOnly: "לטסטים בלבד", aliases: "כינויים", commission: "עמלה", baseSalary: "שכר בסיס",
+  quickDealAccess: "גישה לעסקה מהירה", tracksAccess: "גישה למגמות מקצועיות", testOnly: "לטסטים בלבד", aliases: "כינויים", commission: "עמלה", baseSalary: "שכר בסיס",
   commissionRate: "אחוז עמלה", tiers: "מדרגות", fromSales: "ממכירות של", rate: "אחוז",
   user: "משתמש/ת", at: "בזמן", ip: "כתובת IP", userAgent: "דפדפן",
   accessToken: "טוקן גישה", refreshToken: "טוקן רענון", expiryDate: "תפוגה", scope: "הרשאות / היקף", connectedById: "חובר ע\"י (מזהה)",

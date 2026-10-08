@@ -1,20 +1,24 @@
 import express from "express";
-import { protect, requireManager } from "../middleware/auth.js";
+import { protect, requireManager, requireTracksAccess } from "../middleware/auth.js";
 import * as ctrl from "../controllers/certificateController.js";
 
 /**
  * מחוללי התעודות - מנהל בלבד (יקיר/עדן), כמו שאר הקטלוג.
  * הנכסים מוגשים מכאן ולא מ-server/public כי הריפו ציבורי.
+ * חריג: עמוד "מגמות מקצועיות" (רשימת הנרשמים + שמירת המגמות) פתוח גם לבעלת
+ * tracksAccess (מיכל) - לכן שני הנתיבים האלה יושבים לפני שער המנהל.
  */
 const router = express.Router();
 
-router.use(protect, requireManager);
+router.use(protect);
+
+router.get("/roster/:cohortId", requireTracksAccess, ctrl.roster);
+router.put("/tracks/:cohortId", requireTracksAccess, ctrl.saveTracks);
+
+router.use(requireManager);
 
 router.get("/manifest", ctrl.manifest);
 router.get("/assets/:sha", ctrl.asset);
-
-router.get("/roster/:cohortId", ctrl.roster);
-router.put("/tracks/:cohortId", ctrl.saveTracks);
 
 router.get("/batch/:cohortId/:generator", ctrl.getBatch);
 router.put("/batch/:cohortId/:generator", ctrl.saveBatch);

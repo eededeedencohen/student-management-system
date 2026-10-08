@@ -64,6 +64,8 @@ const publicUser = (user) => ({
   formsAccess: user.formsAccess === true,
   // גישה לעמוד "עסקה מהירה" למי שאינה מנהלת-העל (מיכל)
   quickDealAccess: user.quickDealAccess === true,
+  // גישה לעמוד "מגמות מקצועיות" למי שאינה מנהלת (מיכל)
+  tracksAccess: user.tracksAccess === true,
   commission: user.commission,
 });
 

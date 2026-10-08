@@ -72,6 +72,16 @@ export const requireFormsAccess = (req, res, next) => {
 };
 
 /**
+ * מגמות מקצועיות (עמוד /tracks + רשימת מקבלי התעודה שהוא קורא): מנהלים + מי
+ * שהודלק לה tracksAccess (מיכל). נבדק על המשתמש האפקטיבי, כמו טפסים.
+ */
+export const requireTracksAccess = (req, res, next) => {
+  if (req.user?.role !== "manager" && req.user?.tracksAccess !== true)
+    throw ApiError.forbidden("אין הרשאה למגמות מקצועיות");
+  next();
+};
+
+/**
  * עסקה מהירה: מנהל-העל (עדן) + מי שהודלק לה quickDealAccess (מיכל).
  * ההרשאה נבדקת על המשתמש האפקטיבי, ומנהל-העל האמיתי עובר גם ב"צפייה כ-".
  */
